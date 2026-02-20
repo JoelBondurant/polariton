@@ -57,8 +57,8 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::MinimizeWindow => {
 			return window::latest().and_then(move |id| window::minimize(id, true));
 		}
-		Message::ResizeWindow(edge) => {
-			return window::latest().and_then(move |id| window::drag_resize(id, edge));
+		Message::ResizeWindow(direction) => {
+			return window::latest().and_then(move |id| window::drag_resize(id, direction));
 		}
 		_ => {}
 	}

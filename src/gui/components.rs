@@ -8,7 +8,8 @@ use iced::{
 		button, center, column, container, mouse_area, row, space, text, text_editor, text_input,
 		tooltip, TextEditor, TextInput, Tooltip,
 	},
-	window, Alignment, Background, Center, Color, Element, Fill, Font, Length,
+	window::Direction,
+	Alignment, Background, Center, Color, Element, Fill, Font, Length,
 };
 
 const DEFAULT_BUTTON_SIZE: (u32, u32) = (120, 40);
@@ -176,21 +177,21 @@ pub fn main_screen<'a>(code: &'a text_editor::Content, status: &'a str) -> Eleme
 	let resize_thin = 8;
 	let resize_thick = 40;
 
-	let resize_area_west = styled_resize_area(resize_thin, Fill, window::Direction::West);
-	let resize_area_southwest_side =
-		styled_resize_area(resize_thin, resize_thick, window::Direction::SouthWest);
 	let resize_area_northwest_side =
-		styled_resize_area(resize_thin, resize_thick, window::Direction::NorthWest);
+		styled_resize_area(resize_thin, resize_thick, Direction::NorthWest);
+	let resize_area_west = styled_resize_area(resize_thin, Fill, Direction::West);
+	let resize_area_southwest_side =
+		styled_resize_area(resize_thin, resize_thick, Direction::SouthWest);
 	let resize_area_southwest_bottom =
-		styled_resize_area(resize_thick, resize_thin, window::Direction::SouthWest);
-	let resize_area_east = styled_resize_area(resize_thin, Fill, window::Direction::East);
-	let resize_area_northeast_side =
-		styled_resize_area(resize_thin, resize_thick, window::Direction::NorthEast);
-	let resize_area_southeast_side =
-		styled_resize_area(resize_thin, resize_thick, window::Direction::SouthEast);
+		styled_resize_area(resize_thick, resize_thin, Direction::SouthWest);
+	let resize_area_south = styled_resize_area(Fill, resize_thin, Direction::South);
 	let resize_area_southeast_bottom =
-		styled_resize_area(resize_thick, resize_thin, window::Direction::SouthEast);
-	let resize_area_south = styled_resize_area(Fill, resize_thin, window::Direction::South);
+		styled_resize_area(resize_thick, resize_thin, Direction::SouthEast);
+	let resize_area_northeast_side =
+		styled_resize_area(resize_thin, resize_thick, Direction::NorthEast);
+	let resize_area_east = styled_resize_area(resize_thin, Fill, Direction::East);
+	let resize_area_southeast_side =
+		styled_resize_area(resize_thin, resize_thick, Direction::SouthEast);
 
 	column![
 		row![title_bar()],
@@ -220,10 +221,10 @@ pub fn main_screen<'a>(code: &'a text_editor::Content, status: &'a str) -> Eleme
 	.into()
 }
 
-fn styled_resize_area<'a, WT: Into<Length>, LT: Into<Length>>(
+fn styled_resize_area<'a, WT: Into<Length>, HT: Into<Length>>(
 	width: WT,
-	height: LT,
-	direction: window::Direction,
+	height: HT,
+	direction: Direction,
 ) -> Element<'a, Message> {
 	mouse_area(
 		container(space::horizontal().width(width).height(height)).style(|_theme| {
