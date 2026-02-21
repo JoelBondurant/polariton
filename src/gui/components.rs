@@ -2,7 +2,7 @@ use crate::gui::colors;
 use crate::gui::messages::Message;
 use iced::{
 	advanced::text::highlighter::PlainText,
-	border, font,
+	border, font, mouse,
 	theme::{Palette, Theme},
 	widget::{
 		button, center, column, container, mouse_area, row, space, text, text_editor, text_input,
@@ -174,8 +174,8 @@ pub fn main_screen<'a>(code: &'a text_editor::Content, status: &'a str) -> Eleme
 	.padding(1)
 	.width(Fill);
 
-	let resize_thin = 8;
-	let resize_thick = 40;
+	let resize_thin = 6;
+	let resize_thick = 60;
 
 	let resize_area_northwest_side =
 		styled_resize_area(resize_thin, resize_thick, Direction::NorthWest);
@@ -227,18 +227,22 @@ fn styled_resize_area<'a, WT: Into<Length>, HT: Into<Length>>(
 	direction: Direction,
 ) -> Element<'a, Message> {
 	mouse_area(
-		container(space::horizontal().width(width).height(height)).style(|_theme| {
-			container::Style {
-				background: Some(colors::BG_SECONDARY.into()),
-				border: border::Border {
-					color: colors::BORDER_DIM,
-					width: 1.0,
-					radius: 0.0.into(),
-				},
-				..Default::default()
-			}
+		container(space::horizontal().width(width).height(height)).style(|_| container::Style {
+			background: Some(colors::BG_SECONDARY.into()),
+			border: border::Border {
+				color: colors::BORDER_DIM,
+				width: 1.0,
+				radius: 0.0.into(),
+			},
+			..Default::default()
 		}),
 	)
+	.interaction(match direction {
+		Direction::West | Direction::East => mouse::Interaction::ResizingHorizontally,
+		Direction::North | Direction::South => mouse::Interaction::ResizingVertically,
+		Direction::NorthEast | Direction::SouthWest => mouse::Interaction::ResizingDiagonallyUp,
+		Direction::NorthWest | Direction::SouthEast => mouse::Interaction::ResizingDiagonallyDown,
+	})
 	.on_press(Message::ResizeWindow(direction))
 	.into()
 }
