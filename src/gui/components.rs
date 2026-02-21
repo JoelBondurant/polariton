@@ -151,7 +151,8 @@ pub fn main_screen<'a>(code: &'a text_editor::Content, status: &'a str) -> Eleme
 		styled_text_editor("code".into(), code).on_action(Message::CodeAction),
 		"Code  ",
 	);
-	let main_content = container(center(column![code_editor,].spacing(4)))
+	let data_table = crate::gui::table::Table::new(vec![123, 456, 789]);
+	let main_content = container(center(column![code_editor, data_table].spacing(4)))
 		.padding(4)
 		.width(Fill);
 	let button_bar = row![
