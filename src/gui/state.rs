@@ -3,6 +3,7 @@ use iced::{application, widget::text_editor, window, Element, Size, Task};
 
 struct AppState {
 	code: text_editor::Content,
+	data_tuple: (Vec<String>, Vec<Vec<String>>),
 	status: String,
 	is_maximized: bool,
 }
@@ -27,15 +28,27 @@ pub fn run() -> Result {
 }
 
 fn new() -> AppState {
+	let header = (b'a'..=b'z')
+		.map(|ch| format!("{0}{0}{0}", ch as char))
+		.collect::<Vec<String>>();
+	let mut data = vec![];
+	for offset in 0..26 {
+		let col = (1..=1_000_000)
+			.map(|nx| (nx + offset).to_string())
+			.collect();
+		data.push(col);
+	}
+	let data_tuple = (header, data);
 	AppState {
 		code: text_editor::Content::new(),
+		data_tuple,
 		status: "".to_string(),
 		is_maximized: false,
 	}
 }
 
 fn view(app_state: &AppState) -> Element<'_, Message> {
-	components::main_screen(&app_state.code, &app_state.status)
+	components::main_screen(&app_state.code, &app_state.data_tuple, &app_state.status)
 }
 
 fn update(app_state: &mut AppState, message: Message) -> Task<Message> {

@@ -1,12 +1,12 @@
-use crate::gui::colors;
 use crate::gui::messages::Message;
+use crate::gui::{colors, table::Table};
 use iced::{
 	advanced::text::highlighter::PlainText,
 	border, font, mouse,
 	theme::{Palette, Theme},
 	widget::{
-		button, center, column, container, mouse_area, row, space, text, text_editor, text_input,
-		tooltip, TextEditor, TextInput, Tooltip,
+		button, center, column, container, mouse_area, row, space, text, text_editor, tooltip,
+		TextEditor, Tooltip,
 	},
 	window::Direction,
 	Alignment, Background, Center, Color, Element, Fill, Font, Length,
@@ -146,12 +146,21 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 	.into()
 }
 
-pub fn main_screen<'a>(code: &'a text_editor::Content, status: &'a str) -> Element<'a, Message> {
+pub fn main_screen<'a>(
+	code: &'a text_editor::Content,
+	data_tuple: &'a (Vec<String>, Vec<Vec<String>>),
+	status: &'a str,
+) -> Element<'a, Message> {
 	let code_editor = styled_tooltip(
 		styled_text_editor("code".into(), code).on_action(Message::CodeAction),
 		"Code  ",
 	);
-	let data_table = crate::gui::table::Table::new(vec![123, 456, 789]);
+	let data_table = Table::new(
+		&data_tuple.0,
+		&data_tuple.1,
+		data_tuple.1.first().map_or(0, |vc| vc.len()),
+		0,
+	);
 	let main_content = container(center(column![code_editor, data_table].spacing(4)))
 		.padding(4)
 		.width(Fill);
@@ -307,100 +316,6 @@ fn styled_button<'a, Message: Clone + 'a>(
 	})
 	.on_press(msg)
 	.into()
-}
-
-fn styled_text_input<'a, Message: Clone + 'a>(
-	default_str: &str,
-	input_str: &str,
-) -> TextInput<'a, Message> {
-	text_input(default_str, input_str)
-		.padding(10)
-		.size(18)
-		.style(|_theme: &Theme, status: text_input::Status| match status {
-			text_input::Status::Focused { .. } => text_input::Style {
-				background: Background::Color(colors::BG_INPUT_FOCUS),
-				border: border::Border {
-					color: colors::BORDER_ACCENT,
-					width: 2.0,
-					radius: 5.0.into(),
-				},
-				icon: colors::TEXT_SECONDARY,
-				placeholder: colors::TEXT_PLACEHOLDER_HOVER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-			text_input::Status::Hovered => text_input::Style {
-				background: Background::Color(colors::BG_INPUT_HOVER),
-				border: border::Border {
-					color: colors::BORDER_HOVER,
-					width: 1.5,
-					radius: 5.0.into(),
-				},
-				icon: colors::TEXT_SECONDARY,
-				placeholder: colors::TEXT_PLACEHOLDER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-			_ => text_input::Style {
-				background: Background::Color(colors::BG_INPUT),
-				border: border::Border {
-					color: colors::BORDER_PRIMARY,
-					width: 1.0,
-					radius: 5.0.into(),
-				},
-				icon: colors::TEXT_SECONDARY,
-				placeholder: colors::TEXT_PLACEHOLDER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-		})
-}
-
-fn styled_query_input<'a, Message: Clone + 'a>(
-	default_str: &str,
-	input_str: &str,
-) -> TextInput<'a, Message> {
-	text_input(default_str, input_str)
-		.padding(10)
-		.size(18)
-		.style(|_theme: &Theme, status: text_input::Status| match status {
-			text_input::Status::Focused { .. } => text_input::Style {
-				background: Background::Color(colors::BG_INPUT_FOCUS),
-				border: border::Border {
-					color: colors::BORDER_ACCENT_QUERY,
-					width: 2.0,
-					radius: 5.0.into(),
-				},
-				icon: colors::TEXT_SECONDARY,
-				placeholder: colors::TEXT_PLACEHOLDER_HOVER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-			text_input::Status::Hovered => text_input::Style {
-				background: Background::Color(colors::BG_INPUT_HOVER),
-				border: border::Border {
-					color: colors::BORDER_HOVER_QUERY,
-					width: 1.5,
-					radius: 5.0.into(),
-				},
-				icon: colors::TEXT_SECONDARY,
-				placeholder: colors::TEXT_PLACEHOLDER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-			_ => text_input::Style {
-				background: Background::Color(colors::BG_INPUT),
-				border: border::Border {
-					color: colors::BORDER_PRIMARY_QUERY,
-					width: 1.0,
-					radius: 5.0.into(),
-				},
-				icon: colors::TEXT_SECONDARY,
-				placeholder: colors::TEXT_PLACEHOLDER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-		})
 }
 
 fn styled_text_editor<'a>(

@@ -14,10 +14,6 @@ pub const BORDER_DIM: Color = rgb(24, 2, 32);
 pub const BORDER_ACCENT: Color = rgb(110, 10, 240);
 pub const BORDER_HOVER: Color = rgb(80, 8, 140);
 
-pub const BORDER_PRIMARY_QUERY: Color = rgb(80, 140, 80);
-pub const BORDER_ACCENT_QUERY: Color = rgb(80, 180, 80);
-pub const BORDER_HOVER_QUERY: Color = rgb(60, 140, 60);
-
 pub const TEXT_PRIMARY: Color = rgb(230, 230, 230);
 pub const TEXT_SECONDARY: Color = rgb(200, 180, 200);
 pub const TEXT_PLACEHOLDER: Color = rgb(80, 70, 80);
@@ -35,6 +31,16 @@ pub const SELECTION: Color = rgb(110, 10, 240);
 pub const SUCCESS: Color = rgb(40, 200, 40);
 pub const WARNING: Color = rgb(200, 80, 80);
 
+pub const TABLE_ROW_EVEN: Color = rgb(20, 8, 38);
+pub const TABLE_ROW_ODD: Color = rgb(40, 20, 70);
+pub const TABLE_BORDER: Color = rgba(250, 250, 250, 0.1);
+pub const TABLE_TEXT_HEADER: Color = rgb(250, 250, 250);
+pub const SCROLLBAR_THUMB: Color = rgba(180, 28, 220, 0.3);
+
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
 	Color::from_rgb8(r, g, b)
+}
+
+const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
+	Color::from_rgba8(r, g, b, a)
 }
