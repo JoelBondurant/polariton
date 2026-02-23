@@ -9,9 +9,9 @@ use iced::{
 		Clipboard, Layout, Shell, Widget,
 	},
 	alignment::{Horizontal, Vertical},
-	border, Color, Element, Event, Point,
+	border, keyboard, Color, Element, Event,
 	Length::{self, Fill},
-	Pixels, Rectangle, Size,
+	Pixels, Point, Rectangle, Size,
 };
 
 const ROW_HEIGHT: f32 = 28.0;
@@ -71,6 +71,9 @@ impl<'a> Table<'a> {
 
 #[derive(Default)]
 pub struct TableState {
+	drag_start_offset: f32,
+	drag_start_y: f32,
+	dragging_scrollbar: bool,
 	scroll_offset: f32,
 }
 
@@ -105,20 +108,82 @@ where
 		cursor: Cursor,
 		_renderer: &Renderer,
 		_clipboard: &mut dyn Clipboard,
-		_shell: &mut Shell<'_, Message>,
+		shell: &mut Shell<'_, Message>,
 		_viewport: &Rectangle,
 	) {
 		let state = tree.state.downcast_mut::<TableState>();
 		let bounds = layout.bounds();
-		if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
-			&& cursor.is_over(bounds)
-		{
-			let delta_y = match delta {
-				ScrollDelta::Lines { y, .. } => y * ROW_HEIGHT,
-				ScrollDelta::Pixels { y, .. } => *y,
-			};
-			let max_scroll = (self.total_content_height() - bounds.height).max(0.0);
-			state.scroll_offset = (state.scroll_offset - delta_y).clamp(0.0, max_scroll);
+		let total_h = self.total_content_height();
+		let max_scroll = (total_h - bounds.height).max(0.0);
+		let scrollbar_bounds = self.scrollbar_thumb_rect(bounds, state.scroll_offset);
+		match event {
+			// Mouse wheel
+			Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+				let delta_y = match delta {
+					ScrollDelta::Lines { y, .. } => y * ROW_HEIGHT,
+					ScrollDelta::Pixels { y, .. } => *y,
+				};
+				state.scroll_offset = (state.scroll_offset - delta_y).clamp(0.0, max_scroll);
+				shell.request_redraw();
+			}
+			// Scrollbar drag start
+			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+				if cursor.is_over(scrollbar_bounds) =>
+			{
+				if let Some(pos) = cursor.position() {
+					state.dragging_scrollbar = true;
+					state.drag_start_y = pos.y;
+					state.drag_start_offset = state.scroll_offset;
+					shell.request_redraw();
+				}
+			}
+			// Scrollbar drag move
+			Event::Mouse(mouse::Event::CursorMoved { position }) if state.dragging_scrollbar => {
+				let drag_delta = position.y - state.drag_start_y;
+				let track_h = bounds.height - HEADER_HEIGHT;
+				let scroll_ratio = drag_delta / (track_h - scrollbar_bounds.height).max(1.0);
+				state.scroll_offset =
+					(state.drag_start_offset + scroll_ratio * max_scroll).clamp(0.0, max_scroll);
+				shell.request_redraw();
+			}
+			// Scrollbar drag end
+			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+				if state.dragging_scrollbar =>
+			{
+				state.dragging_scrollbar = false;
+				shell.request_redraw();
+			}
+			// Keyboard navigation
+			Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) if cursor.is_over(bounds) => {
+				let page_size = bounds.height - HEADER_HEIGHT;
+				match key {
+					keyboard::Key::Named(keyboard::key::Named::PageDown) => {
+						state.scroll_offset =
+							(state.scroll_offset + page_size).clamp(0.0, max_scroll);
+					}
+					keyboard::Key::Named(keyboard::key::Named::PageUp) => {
+						state.scroll_offset =
+							(state.scroll_offset - page_size).clamp(0.0, max_scroll);
+					}
+					keyboard::Key::Named(keyboard::key::Named::Home) => {
+						state.scroll_offset = 0.0;
+					}
+					keyboard::Key::Named(keyboard::key::Named::End) => {
+						state.scroll_offset = max_scroll;
+					}
+					keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+						state.scroll_offset =
+							(state.scroll_offset + ROW_HEIGHT).clamp(0.0, max_scroll);
+					}
+					keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+						state.scroll_offset =
+							(state.scroll_offset - ROW_HEIGHT).clamp(0.0, max_scroll);
+					}
+					_ => {}
+				}
+				shell.request_redraw();
+			}
+			_ => {}
 		}
 	}
 
@@ -160,7 +225,6 @@ where
 			);
 			for (col_idx, header) in self.headers.iter().enumerate() {
 				let cell_x = bounds.x + col_idx as f32 * col_w;
-
 				if col_idx > 0 {
 					renderer.fill_quad(
 						renderer::Quad {
@@ -202,100 +266,100 @@ where
 				colors::TABLE_BORDER,
 			);
 			// Rows
-			let first_visible = (scroll / ROW_HEIGHT).floor() as usize;
-			let visible_count =
-				((bounds.height - HEADER_HEIGHT) / ROW_HEIGHT).ceil() as usize + 1;
-			let loaded = self.loaded_row_count();
-			for row_offset in 0..=visible_count {
-				let row_idx = first_visible + row_offset;
-				if row_idx >= loaded {
-					break;
-				}
-				let row_y = bounds.y + HEADER_HEIGHT + row_idx as f32 * ROW_HEIGHT - scroll;
-				if row_y + ROW_HEIGHT < bounds.y + HEADER_HEIGHT {
-					continue;
-				}
-				// Use absolute row index for stable alternating colors across pages
-				let abs_idx = self.row_offset + row_idx;
-				let row_bg = if abs_idx.is_multiple_of(2) {
-					colors::TABLE_ROW_EVEN
-				} else {
-					colors::TABLE_ROW_ODD
-				};
-				renderer.fill_quad(
-					renderer::Quad {
-						bounds: Rectangle {
-							x: bounds.x,
-							y: row_y,
-							width: bounds.width,
-							height: ROW_HEIGHT,
-						},
-						..renderer::Quad::default()
-					},
-					row_bg,
-				);
-				// Row bottom border
-				renderer.fill_quad(
-					renderer::Quad {
-						bounds: Rectangle {
-							x: bounds.x,
-							y: row_y + ROW_HEIGHT - 1.0,
-							width: bounds.width,
-							height: 1.0,
-						},
-						..renderer::Quad::default()
-					},
-					colors::TABLE_BORDER,
-				);
-				// Draw each cell by indexing into the column, not a row vec
-				for (col_idx, col_data) in self.columns.iter().enumerate() {
-					let cell_x = bounds.x + col_idx as f32 * col_w;
-					if col_idx > 0 {
-						renderer.fill_quad(
-							renderer::Quad {
-								bounds: Rectangle {
-									x: cell_x,
-									y: row_y,
-									width: 1.0,
-									height: ROW_HEIGHT,
-								},
-								..renderer::Quad::default()
-							},
-							colors::TABLE_BORDER,
-						);
+			let scrollbar_width = 10.0;
+			let rows_clip = Rectangle {
+				x: bounds.x,
+				y: bounds.y + HEADER_HEIGHT,
+				width: bounds.width - scrollbar_width,
+				height: bounds.height - HEADER_HEIGHT,
+			};
+			renderer.with_layer(rows_clip, |renderer| {
+				let first_visible = (scroll / ROW_HEIGHT).floor() as usize;
+				let visible_count =
+					((bounds.height - HEADER_HEIGHT) / ROW_HEIGHT).ceil() as usize + 1;
+				let loaded = self.loaded_row_count();
+				for row_offset in 0..=visible_count {
+					let row_idx = first_visible + row_offset;
+					if row_idx >= loaded {
+						break;
 					}
-					if let Some(cell) = col_data.get(row_idx) {
-						draw_text(
-							renderer,
-							cell,
-							Rectangle {
-								x: cell_x + CELL_PADDING_X,
+					let row_y = bounds.y + HEADER_HEIGHT + row_idx as f32 * ROW_HEIGHT - scroll;
+					if row_y + ROW_HEIGHT < bounds.y + HEADER_HEIGHT {
+						continue;
+					}
+					// Use absolute row index for stable alternating colors across pages
+					let abs_idx = self.row_offset + row_idx;
+					let row_bg = if abs_idx.is_multiple_of(2) {
+						colors::TABLE_ROW_EVEN
+					} else {
+						colors::TABLE_ROW_ODD
+					};
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds: Rectangle {
+								x: bounds.x,
 								y: row_y,
-								width: col_w - CELL_PADDING_X,
+								width: bounds.width,
 								height: ROW_HEIGHT,
 							},
-							colors::TEXT_PRIMARY,
-							false,
-						);
+							..renderer::Quad::default()
+						},
+						row_bg,
+					);
+					// Row bottom border
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds: Rectangle {
+								x: bounds.x,
+								y: row_y + ROW_HEIGHT - 1.0,
+								width: bounds.width,
+								height: 1.0,
+							},
+							..renderer::Quad::default()
+						},
+						colors::TABLE_BORDER,
+					);
+					// Draw each cell by indexing into the column, not a row vec
+					for (col_idx, col_data) in self.columns.iter().enumerate() {
+						let cell_x = bounds.x + col_idx as f32 * col_w;
+						if col_idx > 0 {
+							renderer.fill_quad(
+								renderer::Quad {
+									bounds: Rectangle {
+										x: cell_x,
+										y: row_y,
+										width: 1.0,
+										height: ROW_HEIGHT,
+									},
+									..renderer::Quad::default()
+								},
+								colors::TABLE_BORDER,
+							);
+						}
+						if let Some(cell) = col_data.get(row_idx) {
+							draw_text(
+								renderer,
+								cell,
+								Rectangle {
+									x: cell_x + CELL_PADDING_X,
+									y: row_y,
+									width: col_w - CELL_PADDING_X,
+									height: ROW_HEIGHT,
+								},
+								colors::TEXT_PRIMARY,
+								false,
+							);
+						}
 					}
 				}
-			}
+			});
 			// Scrollbar
 			let total_h = self.total_content_height();
 			if total_h > bounds.height {
-				let track_h = bounds.height - HEADER_HEIGHT;
-				let thumb_h = (track_h * (bounds.height / total_h)).max(20.0);
-				let thumb_y = bounds.y
-					+ HEADER_HEIGHT
-					+ scroll / (total_h - bounds.height) * (track_h - thumb_h);
+				let thumb = self.scrollbar_thumb_rect(bounds, scroll);
 				renderer.fill_quad(
 					renderer::Quad {
-						bounds: Rectangle {
-							x: bounds.x + bounds.width - 6.0,
-							y: thumb_y,
-							width: 4.0,
-							height: thumb_h,
-						},
+						bounds: thumb,
 						border: border::rounded(2),
 						..renderer::Quad::default()
 					},
@@ -303,6 +367,23 @@ where
 				);
 			}
 		});
+	}
+}
+
+impl<'a> Table<'a> {
+	fn scrollbar_thumb_rect(&self, bounds: Rectangle, scroll_offset: f32) -> Rectangle {
+		let total_h = self.total_content_height();
+		let track_h = bounds.height - HEADER_HEIGHT;
+		let thumb_h = (track_h * (bounds.height / total_h)).max(20.0);
+		let thumb_y = bounds.y
+			+ HEADER_HEIGHT
+			+ scroll_offset / (total_h - bounds.height).max(1.0) * (track_h - thumb_h);
+		Rectangle {
+			x: bounds.x + bounds.width - 6.0,
+			y: thumb_y,
+			width: 4.0,
+			height: thumb_h,
+		}
 	}
 }
 
