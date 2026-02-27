@@ -28,11 +28,12 @@ pub fn run() -> Result {
 }
 
 fn new() -> AppState {
-	let header = (b'a'..=b'z')
-		.map(|ch| format!("{0}{0}{0}", ch as char))
+	let alpha_repeat = 3;
+	let header = (1..=alpha_repeat)
+		.flat_map(|i| (b'a'..=b'z').map(move |ch| format!("{0}{0}{0}{1}", ch as char, i)))
 		.collect::<Vec<String>>();
 	let mut data = vec![];
-	for offset in 0..26 {
+	for offset in 0..26 * alpha_repeat {
 		let col = (1..=1_000_000)
 			.map(|nx| (nx + offset).to_string())
 			.collect();

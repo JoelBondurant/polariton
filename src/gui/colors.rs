@@ -35,7 +35,7 @@ pub const TABLE_ROW_EVEN: Color = rgb(20, 8, 38);
 pub const TABLE_ROW_ODD: Color = rgb(40, 20, 70);
 pub const TABLE_BORDER: Color = rgba(250, 250, 250, 0.1);
 pub const TABLE_TEXT_HEADER: Color = rgb(250, 250, 250);
-pub const SCROLLBAR_THUMB: Color = rgba(180, 28, 220, 0.3);
+pub const SCROLLBAR_THUMB: Color = rgba(140, 0, 250, 0.5);
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
 	Color::from_rgb8(r, g, b)
