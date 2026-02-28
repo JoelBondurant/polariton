@@ -1,4 +1,7 @@
-use iced::{widget::text_editor, window};
+use iced::{
+	widget::{pane_grid, text_editor},
+	window,
+};
 
 #[derive(Clone)]
 pub enum Message {
@@ -7,6 +10,8 @@ pub enum Message {
 	DragWindow,
 	MaximizeWindow,
 	MinimizeWindow,
+	PaneDragged(pane_grid::DragEvent),
+	PaneResized(pane_grid::ResizeEvent),
 	ResizeWindow(window::Direction),
 	Run,
 }

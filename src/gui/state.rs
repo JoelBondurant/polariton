@@ -1,7 +1,17 @@
 use crate::gui::{components, messages::Message};
-use iced::{application, widget::text_editor, window, Element, Size, Task};
+use iced::{
+	application,
+	widget::{pane_grid, text_editor},
+	window, Element, Size, Task,
+};
+
+pub enum PaneType {
+	CodeEditor,
+	DataTable,
+}
 
 struct AppState {
+	panes: pane_grid::State<PaneType>,
 	code: text_editor::Content,
 	data_tuple: (Vec<String>, Vec<Vec<String>>),
 	status: String,
@@ -40,7 +50,14 @@ fn new() -> AppState {
 		data.push(col);
 	}
 	let data_tuple = (header, data);
+	let (mut panes, editor_pane) = pane_grid::State::new(PaneType::CodeEditor);
+	let _ = panes.split(
+		pane_grid::Axis::Horizontal,
+		editor_pane,
+		PaneType::DataTable,
+	);
 	AppState {
+		panes,
 		code: text_editor::Content::new(),
 		data_tuple,
 		status: "".to_string(),
@@ -49,7 +66,12 @@ fn new() -> AppState {
 }
 
 fn view(app_state: &AppState) -> Element<'_, Message> {
-	components::main_screen(&app_state.code, &app_state.data_tuple, &app_state.status)
+	components::main_screen(
+		&app_state.panes,
+		&app_state.code,
+		&app_state.data_tuple,
+		&app_state.status,
+	)
 }
 
 fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
@@ -74,6 +96,13 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::ResizeWindow(direction) => {
 			return window::latest().and_then(move |id| window::drag_resize(id, direction));
 		}
+		Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
+			app_state.panes.resize(split, ratio);
+		}
+		Message::PaneDragged(pane_grid::DragEvent::Dropped { pane, target }) => {
+			app_state.panes.drop(pane, target);
+		}
+		Message::PaneDragged(pane_grid::DragEvent::Canceled { .. }) => {}
 		_ => {}
 	}
 	Task::none()

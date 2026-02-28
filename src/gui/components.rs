@@ -1,12 +1,13 @@
 use crate::gui::messages::Message;
+use crate::gui::state::PaneType;
 use crate::gui::{colors, table::Table};
 use iced::{
 	advanced::text::highlighter::PlainText,
 	border, font, mouse,
 	theme::{Palette, Theme},
 	widget::{
-		button, center, column, container, mouse_area, row, space, text, text_editor, tooltip,
-		TextEditor, Tooltip,
+		button, center, column, container, mouse_area, pane_grid, row, space, text, text_editor,
+		tooltip, TextEditor, Tooltip,
 	},
 	window::Direction,
 	Alignment, Background, Center, Color, Element, Fill, Font, Length,
@@ -147,23 +148,31 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 }
 
 pub fn main_screen<'a>(
+	panes: &'a pane_grid::State<PaneType>,
 	code: &'a text_editor::Content,
 	data_tuple: &'a (Vec<String>, Vec<Vec<String>>),
 	status: &'a str,
 ) -> Element<'a, Message> {
-	let code_editor = styled_tooltip(
-		styled_text_editor("code".into(), code).on_action(Message::CodeAction),
-		"Code  ",
-	);
-	let data_table = Table::new(
-		&data_tuple.0,
-		&data_tuple.1,
-		data_tuple.1.first().map_or(0, |vc| vc.len()),
-		0,
-	);
-	let main_content = container(center(column![code_editor, data_table].spacing(4)))
-		.padding(4)
-		.width(Fill);
+	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
+		PaneType::CodeEditor => pane_grid::Content::new(center(styled_tooltip(
+			styled_text_editor("code".into(), code).on_action(Message::CodeAction),
+			"Code  ",
+		)))
+		.title_bar(pane_grid::TitleBar::new(text(""))),
+		PaneType::DataTable => pane_grid::Content::new(center(Table::new(
+			&data_tuple.0,
+			&data_tuple.1,
+			data_tuple.1.first().map_or(0, |vc| vc.len()),
+			0,
+		)))
+		.title_bar(pane_grid::TitleBar::new(text(""))),
+	})
+	.width(Fill)
+	.height(Fill)
+	.spacing(2)
+	.on_drag(Message::PaneDragged)
+	.on_resize(10, Message::PaneResized);
+	let main_content = container(main_pane).padding(4).width(Fill);
 	let button_bar = row![
 		space::horizontal(),
 		styled_button("Run", Message::Run, DEFAULT_BUTTON_SIZE),
