@@ -1,20 +1,19 @@
-use crate::gui::{components, messages::Message};
+use crate::gui::{
+	components::{self, AdapterStage, PaneType},
+	messages::Message,
+};
 use iced::{
 	application,
 	widget::{pane_grid, text_editor},
 	window, Element, Size, Task,
 };
 
-pub enum PaneType {
-	CodeEditor,
-	DataTable,
-}
-
 struct AppState {
 	panes: pane_grid::State<PaneType>,
 	code: text_editor::Content,
 	data_tuple: (Vec<String>, Vec<Vec<String>>),
 	status: String,
+	adapter_stage: Option<AdapterStage>,
 	is_maximized: bool,
 }
 
@@ -61,6 +60,7 @@ fn new() -> AppState {
 		code: text_editor::Content::new(),
 		data_tuple,
 		status: "".to_string(),
+		adapter_stage: None,
 		is_maximized: false,
 	}
 }
@@ -71,6 +71,7 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 		&app_state.code,
 		&app_state.data_tuple,
 		&app_state.status,
+		&app_state.adapter_stage,
 	)
 }
 
@@ -103,6 +104,12 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			app_state.panes.drop(pane, target);
 		}
 		Message::PaneDragged(pane_grid::DragEvent::Canceled { .. }) => {}
+		Message::Connect => match app_state.adapter_stage {
+			None => {
+				app_state.adapter_stage = Some(AdapterStage::Gallery);
+			}
+			_ => app_state.adapter_stage = None,
+		},
 		_ => {}
 	}
 	Task::none()

@@ -1,19 +1,23 @@
 use crate::gui::messages::Message;
-use crate::gui::state::PaneType;
 use crate::gui::{colors, table::Table};
 use iced::{
 	advanced::text::highlighter::PlainText,
 	border, font, mouse,
 	theme::{Palette, Theme},
 	widget::{
-		button, center, column, container, mouse_area, pane_grid, row, space, text, text_editor,
-		tooltip, TextEditor, Tooltip,
+		button, center, column, container, mouse_area, pane_grid, row, space, stack, text,
+		text_editor, tooltip, TextEditor, Tooltip,
 	},
 	window::Direction,
-	Alignment, Background, Center, Color, Element, Fill, Font, Length,
+	Alignment, Background, Center, Color, Element, Fill, FillPortion, Font, Length,
 };
 
-const DEFAULT_BUTTON_SIZE: (u32, u32) = (120, 40);
+pub const BUTTON_SIZE_DEFAULT: (u32, u32) = (120, 40);
+
+pub enum PaneType {
+	CodeEditor,
+	DataTable,
+}
 
 pub fn theme() -> Theme {
 	Theme::custom(
@@ -152,6 +156,7 @@ pub fn main_screen<'a>(
 	code: &'a text_editor::Content,
 	data_tuple: &'a (Vec<String>, Vec<Vec<String>>),
 	status: &'a str,
+	adapter_stage: &'a Option<AdapterStage>,
 ) -> Element<'a, Message> {
 	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
 		PaneType::CodeEditor => pane_grid::Content::new(center(styled_tooltip(
@@ -175,7 +180,8 @@ pub fn main_screen<'a>(
 	let main_content = container(main_pane).padding(4).width(Fill);
 	let button_bar = row![
 		space::horizontal(),
-		styled_button("Run", Message::Run, DEFAULT_BUTTON_SIZE),
+		styled_button("Connect", Message::Connect, BUTTON_SIZE_DEFAULT),
+		styled_button("Run", Message::Run, BUTTON_SIZE_DEFAULT),
 		space::horizontal(),
 	]
 	.padding(16)
@@ -193,9 +199,14 @@ pub fn main_screen<'a>(
 	.padding(1)
 	.width(Fill);
 
+	let main_window = window_decorations(column![main_content, button_bar, status_bar]);
+	let adapter_modal = adapter_view(adapter_stage);
+	stack![main_window, adapter_modal].into()
+}
+
+fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
 	let resize_thin = 6;
 	let resize_thick = 60;
-
 	let resize_area_northwest_side =
 		styled_resize_area(resize_thin, resize_thick, Direction::NorthWest);
 	let resize_area_west = styled_resize_area(resize_thin, Fill, Direction::West);
@@ -211,7 +222,6 @@ pub fn main_screen<'a>(
 	let resize_area_east = styled_resize_area(resize_thin, Fill, Direction::East);
 	let resize_area_southeast_side =
 		styled_resize_area(resize_thin, resize_thick, Direction::SouthEast);
-
 	column![
 		row![title_bar()],
 		row![
@@ -221,9 +231,7 @@ pub fn main_screen<'a>(
 				resize_area_southwest_side
 			],
 			column![
-				main_content,
-				button_bar,
-				status_bar,
+				underlay.into(),
 				row![
 					resize_area_southwest_bottom,
 					resize_area_south,
@@ -239,6 +247,55 @@ pub fn main_screen<'a>(
 	]
 	.into()
 }
+
+/*
+pub fn styled_text_input<'a, Message: Clone + 'a>(
+	default_str: &str,
+	input_str: &str,
+) -> TextInput<'a, Message> {
+	text_input(default_str, input_str)
+		.padding(10)
+		.size(18)
+		.style(|_theme: &Theme, status: text_input::Status| match status {
+			text_input::Status::Focused { .. } => text_input::Style {
+				background: Background::Color(colors::BG_INPUT_FOCUS),
+				border: border::Border {
+					color: colors::BORDER_ACCENT,
+					width: 2.0,
+					radius: 5.0.into(),
+				},
+				icon: colors::TEXT_SECONDARY,
+				placeholder: colors::TEXT_PLACEHOLDER_HOVER,
+				value: colors::TEXT_SECONDARY,
+				selection: colors::SELECTION,
+			},
+			text_input::Status::Hovered => text_input::Style {
+				background: Background::Color(colors::BG_INPUT_HOVER),
+				border: border::Border {
+					color: colors::BORDER_HOVER,
+					width: 1.5,
+					radius: 5.0.into(),
+				},
+				icon: colors::TEXT_SECONDARY,
+				placeholder: colors::TEXT_PLACEHOLDER,
+				value: colors::TEXT_SECONDARY,
+				selection: colors::SELECTION,
+			},
+			_ => text_input::Style {
+				background: Background::Color(colors::BG_INPUT),
+				border: border::Border {
+					color: colors::BORDER_PRIMARY,
+					width: 1.0,
+					radius: 5.0.into(),
+				},
+				icon: colors::TEXT_SECONDARY,
+				placeholder: colors::TEXT_PLACEHOLDER,
+				value: colors::TEXT_SECONDARY,
+				selection: colors::SELECTION,
+			},
+		})
+}
+*/
 
 fn styled_resize_area<'a, WT: Into<Length>, HT: Into<Length>>(
 	width: WT,
@@ -280,7 +337,7 @@ where
 	)
 }
 
-fn styled_button<'a, Message: Clone + 'a>(
+pub fn styled_button<'a, Message: Clone + 'a>(
 	label: &str,
 	msg: Message,
 	size: (u32, u32),
@@ -371,4 +428,64 @@ fn styled_text_editor<'a>(
 				selection: colors::SELECTION,
 			},
 		})
+}
+
+// Adapter WIP
+
+pub enum AdapterStage {
+	Gallery,
+	Configuration,
+}
+
+#[derive(Clone)]
+pub enum AdapterSelection {
+	SQLite { path: String },
+}
+
+pub fn adapter_view(stage: &Option<AdapterStage>) -> Element<'static, Message> {
+	match stage {
+		None => container(text("")).into(),
+		Some(AdapterStage::Gallery) => adapter_gallery(),
+		Some(AdapterStage::Configuration) => adapter_configuration(),
+	}
+}
+
+fn adapter_gallery() -> Element<'static, Message> {
+	let shadow: Element<AdapterSelection> = container(column![
+		center(text("Select Adapter").size(24)),
+		row![center(styled_button(
+			"SQLite",
+			AdapterSelection::SQLite {
+				path: "".to_string()
+			},
+			BUTTON_SIZE_DEFAULT
+		))]
+		.spacing(20),
+	])
+	.width(FillPortion(96))
+	.height(FillPortion(96))
+	.style(|_| container::Style {
+		background: Some(colors::BG_PRIMARY.into()),
+		border: border::Border {
+			color: colors::BORDER_PRIMARY,
+			width: 1.0,
+			radius: 5.0.into(),
+		},
+		..Default::default()
+	})
+	.into();
+	column![
+		space::vertical().height(FillPortion(4)),
+		row![
+			space::horizontal().width(FillPortion(4)),
+			shadow.map(Message::AdapterSelected),
+			space::horizontal().width(FillPortion(4))
+		],
+		space::vertical().height(FillPortion(4)),
+	]
+	.into()
+}
+
+fn adapter_configuration() -> Element<'static, Message> {
+	column![text("Configure Adapter").size(24),].into()
 }

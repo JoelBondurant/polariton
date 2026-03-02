@@ -3,10 +3,14 @@ use iced::{
 	window,
 };
 
+use crate::gui::components::AdapterSelection;
+
 #[derive(Clone)]
 pub enum Message {
+	AdapterSelected(AdapterSelection),
 	CloseWindow,
 	CodeAction(text_editor::Action),
+	Connect,
 	DragWindow,
 	MaximizeWindow,
 	MinimizeWindow,
