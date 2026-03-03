@@ -1,5 +1,5 @@
 use crate::gui::{
-	components::{self, AdapterStage, PaneType},
+	components::{self, AdapterStage, AdapterState, PaneType},
 	messages::Message,
 };
 use iced::{
@@ -13,7 +13,7 @@ struct AppState {
 	code: text_editor::Content,
 	data_tuple: (Vec<String>, Vec<Vec<String>>),
 	status: String,
-	adapter_stage: Option<AdapterStage>,
+	adapter_state: AdapterState,
 	is_maximized: bool,
 }
 
@@ -60,7 +60,7 @@ fn new() -> AppState {
 		code: text_editor::Content::new(),
 		data_tuple,
 		status: "".to_string(),
-		adapter_stage: None,
+		adapter_state: AdapterState::default(),
 		is_maximized: false,
 	}
 }
@@ -71,7 +71,7 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 		&app_state.code,
 		&app_state.data_tuple,
 		&app_state.status,
-		&app_state.adapter_stage,
+		&app_state.adapter_state,
 	)
 }
 
@@ -104,12 +104,26 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			app_state.panes.drop(pane, target);
 		}
 		Message::PaneDragged(pane_grid::DragEvent::Canceled { .. }) => {}
-		Message::Connect => match app_state.adapter_stage {
+		Message::Connect => match app_state.adapter_state.stage {
 			None => {
-				app_state.adapter_stage = Some(AdapterStage::Gallery);
+				app_state.adapter_state.stage = Some(AdapterStage::Gallery);
 			}
-			_ => app_state.adapter_stage = None,
+			_ => app_state.adapter_state.stage = None,
 		},
+		Message::AdapterSelected(adapter_selection) => {
+			app_state.adapter_state.stage = Some(AdapterStage::Configuration);
+			app_state.adapter_state.selection = Some(adapter_selection);
+		}
+		Message::AdapterConfigurationChanged(key, value) => {
+			app_state.adapter_state.fields.insert(key, value);
+		}
+		Message::AdapterConfigurationSubmitted => {
+			if let Some(config) = app_state.adapter_state.try_into_adapter_config() {
+				println!("{:?}", config);
+				app_state.adapter_state.config = Some(config);
+			}
+			app_state.adapter_state.stage = None;
+		}
 		_ => {}
 	}
 	Task::none()

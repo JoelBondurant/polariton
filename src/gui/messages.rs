@@ -8,6 +8,8 @@ use crate::gui::components::AdapterSelection;
 #[derive(Clone)]
 pub enum Message {
 	AdapterSelected(AdapterSelection),
+	AdapterConfigurationChanged(String, String),
+	AdapterConfigurationSubmitted,
 	CloseWindow,
 	CodeAction(text_editor::Action),
 	Connect,

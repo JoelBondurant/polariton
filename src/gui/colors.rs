@@ -7,6 +7,7 @@ pub const BG_INPUT_HOVER: Color = rgb(10, 8, 16);
 pub const BG_INPUT_FOCUS: Color = rgb(8, 4, 10);
 pub const BG_BUTTON: Color = rgb(8, 8, 16);
 pub const BG_BUTTON_HOVER: Color = rgb(16, 16, 32);
+pub const BG_MODAL: Color = rgba(2, 2, 2, 0.96);
 
 pub const BORDER_PRIMARY: Color = rgb(60, 8, 100);
 pub const BORDER_SECONDARY: Color = rgb(32, 80, 32);

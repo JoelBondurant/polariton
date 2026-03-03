@@ -6,11 +6,12 @@ use iced::{
 	theme::{Palette, Theme},
 	widget::{
 		button, center, column, container, mouse_area, pane_grid, row, space, stack, text,
-		text_editor, tooltip, TextEditor, Tooltip,
+		text_editor, text_input, tooltip, TextEditor, TextInput, Tooltip,
 	},
 	window::Direction,
 	Alignment, Background, Center, Color, Element, Fill, FillPortion, Font, Length,
 };
+use std::collections::BTreeMap;
 
 pub const BUTTON_SIZE_DEFAULT: (u32, u32) = (120, 40);
 
@@ -156,7 +157,7 @@ pub fn main_screen<'a>(
 	code: &'a text_editor::Content,
 	data_tuple: &'a (Vec<String>, Vec<Vec<String>>),
 	status: &'a str,
-	adapter_stage: &'a Option<AdapterStage>,
+	adapter_state: &'a AdapterState,
 ) -> Element<'a, Message> {
 	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
 		PaneType::CodeEditor => pane_grid::Content::new(center(styled_tooltip(
@@ -181,6 +182,7 @@ pub fn main_screen<'a>(
 	let button_bar = row![
 		space::horizontal(),
 		styled_button("Connect", Message::Connect, BUTTON_SIZE_DEFAULT),
+		space::horizontal(),
 		styled_button("Run", Message::Run, BUTTON_SIZE_DEFAULT),
 		space::horizontal(),
 	]
@@ -200,7 +202,7 @@ pub fn main_screen<'a>(
 	.width(Fill);
 
 	let main_window = window_decorations(column![main_content, button_bar, status_bar]);
-	let adapter_modal = adapter_view(adapter_stage);
+	let adapter_modal = adapter_view(adapter_state);
 	stack![main_window, adapter_modal].into()
 }
 
@@ -248,7 +250,6 @@ fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<
 	.into()
 }
 
-/*
 pub fn styled_text_input<'a, Message: Clone + 'a>(
 	default_str: &str,
 	input_str: &str,
@@ -295,7 +296,6 @@ pub fn styled_text_input<'a, Message: Clone + 'a>(
 			},
 		})
 }
-*/
 
 fn styled_resize_area<'a, WT: Into<Length>, HT: Into<Length>>(
 	width: WT,
@@ -432,6 +432,26 @@ fn styled_text_editor<'a>(
 
 // Adapter WIP
 
+#[derive(Default)]
+pub struct AdapterState {
+	pub stage: Option<AdapterStage>,
+	pub selection: Option<AdapterSelection>,
+	pub fields: BTreeMap<String, String>,
+	pub config: Option<AdapterConfiguration>,
+}
+
+impl AdapterState {
+	pub fn try_into_adapter_config(&self) -> Option<AdapterConfiguration> {
+		match &self.selection {
+			Some(AdapterSelection::SQLite) => {
+				let path = self.fields.get("path")?.clone();
+				Some(AdapterConfiguration::SQLite { path })
+			}
+			_ => None,
+		}
+	}
+}
+
 pub enum AdapterStage {
 	Gallery,
 	Configuration,
@@ -439,33 +459,39 @@ pub enum AdapterStage {
 
 #[derive(Clone)]
 pub enum AdapterSelection {
+	SQLite,
+}
+
+#[derive(Clone, Debug)]
+pub enum AdapterConfiguration {
 	SQLite { path: String },
 }
 
-pub fn adapter_view(stage: &Option<AdapterStage>) -> Element<'static, Message> {
-	match stage {
+pub fn adapter_view(adapter_state: &AdapterState) -> Element<'static, Message> {
+	match adapter_state.stage {
 		None => container(text("")).into(),
-		Some(AdapterStage::Gallery) => adapter_gallery(),
-		Some(AdapterStage::Configuration) => adapter_configuration(),
+		Some(AdapterStage::Gallery) => adapter_gallery_view(),
+		Some(AdapterStage::Configuration) => adapter_configuration_view(adapter_state),
 	}
 }
 
-fn adapter_gallery() -> Element<'static, Message> {
-	let shadow: Element<AdapterSelection> = container(column![
+const MODAL_FILL_PORTION_V: u16 = 80;
+const MODAL_FILL_PORTION_H: u16 = 80;
+
+fn adapter_gallery_view() -> Element<'static, Message> {
+	let dialog: Element<Message> = container(column![
 		center(text("Select Adapter").size(24)),
 		row![center(styled_button(
 			"SQLite",
-			AdapterSelection::SQLite {
-				path: "".to_string()
-			},
+			Message::AdapterSelected(AdapterSelection::SQLite),
 			BUTTON_SIZE_DEFAULT
 		))]
 		.spacing(20),
 	])
-	.width(FillPortion(96))
-	.height(FillPortion(96))
+	.width(FillPortion(MODAL_FILL_PORTION_H))
+	.height(FillPortion(MODAL_FILL_PORTION_V))
 	.style(|_| container::Style {
-		background: Some(colors::BG_PRIMARY.into()),
+		background: Some(colors::BG_MODAL.into()),
 		border: border::Border {
 			color: colors::BORDER_PRIMARY,
 			width: 1.0,
@@ -475,17 +501,85 @@ fn adapter_gallery() -> Element<'static, Message> {
 	})
 	.into();
 	column![
-		space::vertical().height(FillPortion(4)),
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
 		row![
-			space::horizontal().width(FillPortion(4)),
-			shadow.map(Message::AdapterSelected),
-			space::horizontal().width(FillPortion(4))
+			space::horizontal().width(FillPortion((100 - MODAL_FILL_PORTION_H) / 2)),
+			dialog,
+			space::horizontal().width(FillPortion((100 - MODAL_FILL_PORTION_H) / 2)),
 		],
-		space::vertical().height(FillPortion(4)),
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
 	]
 	.into()
 }
 
-fn adapter_configuration() -> Element<'static, Message> {
-	column![text("Configure Adapter").size(24),].into()
+pub struct FieldDescriptor {
+	pub key: &'static str,
+	pub placeholder: &'static str,
+	pub secret: bool,
+}
+
+pub fn fields_for(selection: &AdapterSelection) -> &'static [FieldDescriptor] {
+	match selection {
+		AdapterSelection::SQLite => &[FieldDescriptor {
+			key: "path",
+			placeholder: "/path/to/db.sqlite",
+			secret: false,
+		}],
+	}
+}
+
+pub fn adapter_configuration_view(adapter_state: &AdapterState) -> Element<'static, Message> {
+	let fields_col: Element<Message> = match &adapter_state.selection {
+		None => text("Select an adapter to configure.").into(),
+		Some(selection) => {
+			let descriptors = fields_for(selection);
+			let inputs = descriptors.iter().fold(column![].spacing(8), |col, field| {
+				let current_value = adapter_state
+					.fields
+					.get(field.key)
+					.cloned()
+					.unwrap_or_default();
+				let key = field.key;
+				let input = if field.secret {
+					styled_text_input(field.placeholder, &current_value).secure(true)
+				} else {
+					styled_text_input(field.placeholder, &current_value)
+				};
+				let input = input
+					.on_input(move |val| Message::AdapterConfigurationChanged(key.into(), val))
+					.on_submit(Message::AdapterConfigurationSubmitted);
+				col.push(column![text(field.key), input,].spacing(4))
+			});
+
+			inputs.into()
+		}
+	};
+	let dialog: Element<Message> = container(column![
+		space::vertical(),
+		center(text("Configure Adapter").size(24)),
+		row![space::horizontal(), fields_col, space::horizontal(),],
+		space::vertical(),
+	])
+	.width(FillPortion(MODAL_FILL_PORTION_H))
+	.height(FillPortion(MODAL_FILL_PORTION_V))
+	.style(|_| container::Style {
+		background: Some(colors::BG_MODAL.into()),
+		border: border::Border {
+			color: colors::BORDER_PRIMARY,
+			width: 1.0,
+			radius: 5.0.into(),
+		},
+		..Default::default()
+	})
+	.into();
+	column![
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
+		row![
+			space::horizontal().width(FillPortion((100 - MODAL_FILL_PORTION_H) / 2)),
+			dialog,
+			space::horizontal().width(FillPortion((100 - MODAL_FILL_PORTION_H) / 2)),
+		],
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
+	]
+	.into()
 }
