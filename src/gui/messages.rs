@@ -1,15 +1,16 @@
+use crate::adapters::{common::DatabaseAdapter, driver::AdapterSelection};
 use iced::{
 	widget::{pane_grid, text_editor},
 	window,
 };
-
-use crate::gui::components::AdapterSelection;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum Message {
 	AdapterSelected(AdapterSelection),
 	AdapterConfigurationChanged(String, String),
 	AdapterConfigurationSubmitted,
+	AdapterConnected(Option<Arc<dyn DatabaseAdapter>>),
 	CloseWindow,
 	CodeAction(text_editor::Action),
 	Connect,

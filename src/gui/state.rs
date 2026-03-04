@@ -1,5 +1,6 @@
+use crate::adapters::{common::AdapterStage, driver::AdapterState};
 use crate::gui::{
-	components::{self, AdapterStage, AdapterState, PaneType},
+	components::{self, PaneType},
 	messages::Message,
 };
 use iced::{
@@ -105,24 +106,30 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::PaneDragged(pane_grid::DragEvent::Canceled { .. }) => {}
 		Message::Connect => match app_state.adapter_state.stage {
-			None => {
-				app_state.adapter_state.stage = Some(AdapterStage::Gallery);
+			AdapterStage::None => {
+				app_state.adapter_state.stage = AdapterStage::Unselected;
 			}
-			_ => app_state.adapter_state.stage = None,
+			_ => app_state.adapter_state.stage = AdapterStage::None,
 		},
 		Message::AdapterSelected(adapter_selection) => {
-			app_state.adapter_state.stage = Some(AdapterStage::Configuration);
-			app_state.adapter_state.selection = Some(adapter_selection);
+			app_state.adapter_state.stage = AdapterStage::Unconfigured;
+			app_state.adapter_state.selection = adapter_selection;
 		}
 		Message::AdapterConfigurationChanged(key, value) => {
 			app_state.adapter_state.fields.insert(key, value);
 		}
 		Message::AdapterConfigurationSubmitted => {
-			if let Some(config) = app_state.adapter_state.try_into_adapter_config() {
-				println!("{:?}", config);
-				app_state.adapter_state.config = Some(config);
-			}
-			app_state.adapter_state.stage = None;
+			app_state.adapter_state.configure();
+			app_state.adapter_state.stage = AdapterStage::Configured;
+			let config = app_state.adapter_state.configuration.clone();
+			return Task::perform(
+				async move { AdapterState::establish_connection(config).await },
+				Message::AdapterConnected,
+			);
+		}
+		Message::AdapterConnected(dba) => {
+			app_state.adapter_state.connection = dba;
+			app_state.adapter_state.stage = AdapterStage::Connected;
 		}
 		_ => {}
 	}

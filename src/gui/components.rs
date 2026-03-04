@@ -1,3 +1,7 @@
+use crate::adapters::{
+	common::{AdapterFieldType, AdapterStage},
+	driver::{fields_for, AdapterSelection, AdapterState},
+};
 use crate::gui::messages::Message;
 use crate::gui::{colors, table::Table};
 use iced::{
@@ -11,7 +15,6 @@ use iced::{
 	window::Direction,
 	Alignment, Background, Center, Color, Element, Fill, FillPortion, Font, Length,
 };
-use std::collections::BTreeMap;
 
 pub const BUTTON_SIZE_DEFAULT: (u32, u32) = (120, 40);
 
@@ -430,48 +433,13 @@ fn styled_text_editor<'a>(
 		})
 }
 
-// Adapter WIP
-
-#[derive(Default)]
-pub struct AdapterState {
-	pub stage: Option<AdapterStage>,
-	pub selection: Option<AdapterSelection>,
-	pub fields: BTreeMap<String, String>,
-	pub config: Option<AdapterConfiguration>,
-}
-
-impl AdapterState {
-	pub fn try_into_adapter_config(&self) -> Option<AdapterConfiguration> {
-		match &self.selection {
-			Some(AdapterSelection::SQLite) => {
-				let path = self.fields.get("path")?.clone();
-				Some(AdapterConfiguration::SQLite { path })
-			}
-			_ => None,
-		}
-	}
-}
-
-pub enum AdapterStage {
-	Gallery,
-	Configuration,
-}
-
-#[derive(Clone)]
-pub enum AdapterSelection {
-	SQLite,
-}
-
-#[derive(Clone, Debug)]
-pub enum AdapterConfiguration {
-	SQLite { path: String },
-}
-
 pub fn adapter_view(adapter_state: &AdapterState) -> Element<'static, Message> {
 	match adapter_state.stage {
-		None => container(text("")).into(),
-		Some(AdapterStage::Gallery) => adapter_gallery_view(),
-		Some(AdapterStage::Configuration) => adapter_configuration_view(adapter_state),
+		AdapterStage::None => container(text("Adapter: None")).into(),
+		AdapterStage::Unselected => adapter_gallery_view(),
+		AdapterStage::Unconfigured => adapter_configuration_view(adapter_state),
+		AdapterStage::Configured => container(text("Adapter: Configured")).into(),
+		AdapterStage::Connected => container(text("Adapter: Connected")).into(),
 	}
 }
 
@@ -512,26 +480,10 @@ fn adapter_gallery_view() -> Element<'static, Message> {
 	.into()
 }
 
-pub struct FieldDescriptor {
-	pub key: &'static str,
-	pub placeholder: &'static str,
-	pub secret: bool,
-}
-
-pub fn fields_for(selection: &AdapterSelection) -> &'static [FieldDescriptor] {
-	match selection {
-		AdapterSelection::SQLite => &[FieldDescriptor {
-			key: "path",
-			placeholder: "/path/to/db.sqlite",
-			secret: false,
-		}],
-	}
-}
-
 pub fn adapter_configuration_view(adapter_state: &AdapterState) -> Element<'static, Message> {
 	let fields_col: Element<Message> = match &adapter_state.selection {
-		None => text("Select an adapter to configure.").into(),
-		Some(selection) => {
+		AdapterSelection::None => text("Select an adapter to configure.").into(),
+		selection => {
 			let descriptors = fields_for(selection);
 			let inputs = descriptors.iter().fold(column![].spacing(8), |col, field| {
 				let current_value = adapter_state
@@ -540,17 +492,22 @@ pub fn adapter_configuration_view(adapter_state: &AdapterState) -> Element<'stat
 					.cloned()
 					.unwrap_or_default();
 				let key = field.key;
-				let input = if field.secret {
-					styled_text_input(field.placeholder, &current_value).secure(true)
-				} else {
-					styled_text_input(field.placeholder, &current_value)
-				};
-				let input = input
-					.on_input(move |val| Message::AdapterConfigurationChanged(key.into(), val))
-					.on_submit(Message::AdapterConfigurationSubmitted);
-				col.push(column![text(field.key), input,].spacing(4))
+				match field.field_type {
+					AdapterFieldType::Text => {
+						let input = if field.is_secure {
+							styled_text_input(field.value, &current_value).secure(true)
+						} else {
+							styled_text_input(field.value, &current_value)
+						};
+						let input = input
+							.on_input(move |val| {
+								Message::AdapterConfigurationChanged(key.into(), val)
+							})
+							.on_submit(Message::AdapterConfigurationSubmitted);
+						col.push(column![text(field.key), input,].spacing(4))
+					}
+				}
 			});
-
 			inputs.into()
 		}
 	};
