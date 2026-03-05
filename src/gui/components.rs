@@ -435,11 +435,11 @@ fn styled_text_editor<'a>(
 
 pub fn adapter_view(adapter_state: &AdapterState) -> Element<'static, Message> {
 	match adapter_state.stage {
-		AdapterStage::None => container(text("Adapter: None")).into(),
+		AdapterStage::None => container(text("")).into(),
 		AdapterStage::Unselected => adapter_gallery_view(),
 		AdapterStage::Unconfigured => adapter_configuration_view(adapter_state),
-		AdapterStage::Configured => container(text("Adapter: Configured")).into(),
-		AdapterStage::Connected => container(text("Adapter: Connected")).into(),
+		AdapterStage::Configured => container(text("")).into(),
+		AdapterStage::Connected => container(text("")).into(),
 	}
 }
 

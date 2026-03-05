@@ -12,7 +12,7 @@ use tokio_rusqlite::{
 
 pub const FIELDS: &[AdapterField] = &[AdapterField {
 	key: "connection_string",
-	value: "memory.sqlite",
+	value: "memory",
 	field_type: &AdapterFieldType::Text,
 	is_secure: false,
 }];

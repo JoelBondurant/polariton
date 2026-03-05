@@ -108,18 +108,25 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::Connect => match app_state.adapter_state.stage {
 			AdapterStage::None => {
 				app_state.adapter_state.stage = AdapterStage::Unselected;
+				app_state.status = "Select an adapter.".into();
 			}
-			_ => app_state.adapter_state.stage = AdapterStage::None,
+			_ => {
+				app_state.adapter_state.stage = AdapterStage::None;
+				app_state.status = "No adapter selected.".into();
+			}
 		},
 		Message::AdapterSelected(adapter_selection) => {
 			app_state.adapter_state.stage = AdapterStage::Unconfigured;
+			app_state.status = format!("Adapter selected: {:?}", adapter_selection);
 			app_state.adapter_state.selection = adapter_selection;
 		}
 		Message::AdapterConfigurationChanged(key, value) => {
 			app_state.adapter_state.fields.insert(key, value);
+			app_state.status = "Configure adapter.".into();
 		}
 		Message::AdapterConfigurationSubmitted => {
 			app_state.adapter_state.configure();
+			app_state.status = "Adapter configured.".into();
 			app_state.adapter_state.stage = AdapterStage::Configured;
 			let config = app_state.adapter_state.configuration.clone();
 			return Task::perform(
@@ -130,6 +137,23 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::AdapterConnected(dba) => {
 			app_state.adapter_state.connection = dba;
 			app_state.adapter_state.stage = AdapterStage::Connected;
+			app_state.status = "Adapter connected.".into();
+		}
+		Message::Run => match &app_state.adapter_state.connection {
+			None => {}
+			Some(db) => {
+				let code = app_state.code.text().clone();
+				let db = db.clone();
+				app_state.status = "Code running...".into();
+				return Task::perform(
+					async move { db.execute(&code).await.unwrap() },
+					Message::DataTable,
+				);
+			}
+		},
+		Message::DataTable(df) => {
+			println!("DataFrame: {:?}", df);
+			app_state.status = "Code finished.".into();
 		}
 		_ => {}
 	}

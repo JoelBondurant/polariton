@@ -55,9 +55,16 @@ impl AdapterState {
 		match config {
 			AdapterConfiguration::None => None,
 			AdapterConfiguration::SQLite { connection_string } => {
-				match AsyncConnection::open(connection_string).await.ok() {
-					Some(aconn) => Some(Arc::new(sqlite::SQLiteAdapter { aconn })),
-					None => None,
+				if connection_string == "memory" {
+					match AsyncConnection::open_in_memory().await.ok() {
+						Some(aconn) => Some(Arc::new(sqlite::SQLiteAdapter { aconn })),
+						None => None,
+					}
+				} else {
+					match AsyncConnection::open(connection_string).await.ok() {
+						Some(aconn) => Some(Arc::new(sqlite::SQLiteAdapter { aconn })),
+						None => None,
+					}
 				}
 			}
 		}

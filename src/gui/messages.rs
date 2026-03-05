@@ -3,6 +3,7 @@ use iced::{
 	widget::{pane_grid, text_editor},
 	window,
 };
+use polars::frame::DataFrame;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -14,6 +15,7 @@ pub enum Message {
 	CloseWindow,
 	CodeAction(text_editor::Action),
 	Connect,
+	DataTable(DataFrame),
 	DragWindow,
 	MaximizeWindow,
 	MinimizeWindow,
