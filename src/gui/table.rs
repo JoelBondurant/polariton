@@ -13,6 +13,10 @@ use iced::{
 	Length::{self, Fill},
 	Pixels, Point, Rectangle, Size,
 };
+use polars::{
+	datatypes::AnyValue,
+	frame::{column::Column, DataFrame},
+};
 
 const ROW_HEIGHT: f32 = 28.0;
 const HEADER_HEIGHT: f32 = 32.0;
@@ -25,25 +29,15 @@ const H_SCROLLBAR_HEIGHT: f32 = 12.0;
 const COL_RESIZE_GRAB_ZONE: f32 = 4.0;
 
 pub struct Table<'a> {
-	headers: &'a [String],
-	columns: &'a [Vec<String>],
-	total_row_count: usize,
+	data_frame: &'a DataFrame,
 	row_offset: usize,
 	col_width: Option<f32>,
 }
 
 impl<'a> Table<'a> {
-	pub fn new(
-		headers: &'a [String],
-		columns: &'a [Vec<String>],
-		total_row_count: usize,
-		row_offset: usize,
-	) -> Self {
-		debug_assert_eq!(headers.len(), columns.len(), "header/column count mismatch");
+	pub fn new(data_frame: &'a DataFrame, row_offset: usize) -> Self {
 		Self {
-			headers,
-			columns,
-			total_row_count,
+			data_frame,
 			row_offset,
 			col_width: None,
 		}
@@ -55,7 +49,11 @@ impl<'a> Table<'a> {
 	}
 
 	fn col_count(&self) -> usize {
-		self.columns.len()
+		self.data_frame.width()
+	}
+
+	fn total_row_count(&self) -> usize {
+		self.data_frame.height()
 	}
 
 	fn default_col_width(&self, viewport_width: f32) -> f32 {
@@ -84,11 +82,27 @@ impl<'a> Table<'a> {
 	}
 
 	fn total_content_height(&self) -> f32 {
-		HEADER_HEIGHT + self.total_row_count as f32 * ROW_HEIGHT
+		HEADER_HEIGHT + self.total_row_count() as f32 * ROW_HEIGHT
 	}
 
 	fn loaded_row_count(&self) -> usize {
-		self.columns.first().map_or(0, |c| c.len())
+		self.data_frame.height()
+	}
+
+	fn cell_str(&self, col_idx: usize, row_idx: usize) -> String {
+		let series: &Column = match self.data_frame.columns().get(col_idx) {
+			Some(s) => s,
+			None => return String::new(),
+		};
+		if row_idx >= series.len() {
+			return String::new();
+		}
+		match series.get(row_idx) {
+			Ok(AnyValue::Null) | Err(_) => String::new(),
+			Ok(AnyValue::String(s)) => s.to_string(),
+			Ok(AnyValue::StringOwned(s)) => s.to_string(),
+			Ok(v) => format!("{v}"),
+		}
 	}
 
 	fn col_left_edges(&self, state: &TableState) -> Vec<f32> {
@@ -255,7 +269,6 @@ where
 		let max_h_scroll = (total_w - viewport_w).max(0.0);
 		let v_thumb = self.v_scrollbar_thumb_rect(bounds, state.v_scroll_offset);
 		let h_thumb = self.h_scrollbar_thumb_rect(bounds, state.h_scroll_offset, state);
-
 		match event {
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
 				if let Some(pos) = cursor.position() {
@@ -425,7 +438,7 @@ where
 			renderer.with_layer(header_clip, |renderer| {
 				let col_widths = self.col_widths_ref(state);
 				let mut cell_x = bounds.x - h_scroll;
-				for (col_idx, header) in self.headers.iter().enumerate() {
+				for (col_idx, field) in self.data_frame.get_column_names().iter().enumerate() {
 					let col_w = col_widths[col_idx];
 					if cell_x + col_w >= bounds.x && cell_x <= bounds.x + viewport_w {
 						if col_idx > 0 {
@@ -444,7 +457,7 @@ where
 						}
 						draw_text(
 							renderer,
-							header,
+							field.as_str(),
 							Rectangle {
 								x: cell_x + CELL_PADDING_X,
 								y: bounds.y,
@@ -522,8 +535,7 @@ where
 						colors::TABLE_BORDER,
 					);
 					let mut cell_x = bounds.x - h_scroll;
-					for (col_idx, col_data) in self.columns.iter().enumerate() {
-						let col_w = col_widths[col_idx];
+					for (col_idx, &col_w) in col_widths.iter().enumerate() {
 						if cell_x + col_w >= bounds.x && cell_x <= bounds.x + viewport_w {
 							if col_idx > 0 {
 								renderer.fill_quad(
@@ -539,20 +551,19 @@ where
 									colors::TABLE_BORDER,
 								);
 							}
-							if let Some(cell) = col_data.get(row_idx) {
-								draw_text(
-									renderer,
-									cell,
-									Rectangle {
-										x: cell_x + CELL_PADDING_X,
-										y: row_y,
-										width: col_w - CELL_PADDING_X,
-										height: ROW_HEIGHT,
-									},
-									colors::TEXT_PRIMARY,
-									false,
-								);
-							}
+							let text = self.cell_str(col_idx, row_idx);
+							draw_text(
+								renderer,
+								&text,
+								Rectangle {
+									x: cell_x + CELL_PADDING_X,
+									y: row_y,
+									width: col_w - CELL_PADDING_X,
+									height: ROW_HEIGHT,
+								},
+								colors::TEXT_PRIMARY,
+								false,
+							);
 						}
 						cell_x += col_w;
 					}

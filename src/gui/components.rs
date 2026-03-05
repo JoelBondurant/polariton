@@ -15,6 +15,7 @@ use iced::{
 	window::Direction,
 	Alignment, Background, Center, Color, Element, Fill, FillPortion, Font, Length,
 };
+use polars::frame::DataFrame;
 
 pub const BUTTON_SIZE_DEFAULT: (u32, u32) = (120, 40);
 
@@ -158,7 +159,7 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 pub fn main_screen<'a>(
 	panes: &'a pane_grid::State<PaneType>,
 	code: &'a text_editor::Content,
-	data_tuple: &'a (Vec<String>, Vec<Vec<String>>),
+	data_frame: &'a DataFrame,
 	status: &'a str,
 	adapter_state: &'a AdapterState,
 ) -> Element<'a, Message> {
@@ -168,13 +169,8 @@ pub fn main_screen<'a>(
 			"Code  ",
 		)))
 		.title_bar(pane_grid::TitleBar::new(text(""))),
-		PaneType::DataTable => pane_grid::Content::new(center(Table::new(
-			&data_tuple.0,
-			&data_tuple.1,
-			data_tuple.1.first().map_or(0, |vc| vc.len()),
-			0,
-		)))
-		.title_bar(pane_grid::TitleBar::new(text(""))),
+		PaneType::DataTable => pane_grid::Content::new(center(Table::new(&data_frame, 0)))
+			.title_bar(pane_grid::TitleBar::new(text(""))),
 	})
 	.width(Fill)
 	.height(Fill)

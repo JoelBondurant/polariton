@@ -8,11 +8,15 @@ use iced::{
 	widget::{pane_grid, text_editor},
 	window, Element, Size, Task,
 };
+use polars::frame::column::Column;
+use polars::frame::DataFrame;
+use polars::prelude::NamedFrom;
+use polars::series::Series;
 
 struct AppState {
 	panes: pane_grid::State<PaneType>,
 	code: text_editor::Content,
-	data_tuple: (Vec<String>, Vec<Vec<String>>),
+	data_frame: DataFrame,
 	status: String,
 	adapter_state: AdapterState,
 	is_maximized: bool,
@@ -46,10 +50,16 @@ fn new() -> AppState {
 	for offset in 0..26 * alpha_repeat {
 		let col = (1..=1_000_000)
 			.map(|nx| (nx + offset).to_string())
-			.collect();
+			.collect::<Vec<String>>();
 		data.push(col);
 	}
-	let data_tuple = (header, data);
+	let height = data.get(0).unwrap_or(&Default::default()).len();
+	let series_vec = header
+		.into_iter()
+		.zip(data.into_iter())
+		.map(|(name, col)| Column::from(Series::new(name.into(), col)))
+		.collect::<Vec<Column>>();
+	let data_frame = DataFrame::new(height, series_vec).unwrap_or(Default::default());
 	let (mut panes, editor_pane) = pane_grid::State::new(PaneType::CodeEditor);
 	let _ = panes.split(
 		pane_grid::Axis::Horizontal,
@@ -59,7 +69,7 @@ fn new() -> AppState {
 	AppState {
 		panes,
 		code: text_editor::Content::new(),
-		data_tuple,
+		data_frame,
 		status: "".to_string(),
 		adapter_state: AdapterState::default(),
 		is_maximized: false,
@@ -70,7 +80,7 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 	components::main_screen(
 		&app_state.panes,
 		&app_state.code,
-		&app_state.data_tuple,
+		&app_state.data_frame,
 		&app_state.status,
 		&app_state.adapter_state,
 	)

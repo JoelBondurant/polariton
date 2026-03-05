@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use polars::prelude::DataFrame;
+use polars::frame::DataFrame;
 
 #[derive(Clone, Debug, Default)]
 pub enum AdapterStage {
