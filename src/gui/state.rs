@@ -9,6 +9,7 @@ use iced::{
 	window, Element, Size, Task,
 };
 use polars::frame::DataFrame;
+use std::time::Instant;
 
 struct AppState {
 	panes: pane_grid::State<PaneType>,
@@ -16,6 +17,7 @@ struct AppState {
 	data_frame: DataFrame,
 	status: String,
 	adapter_state: AdapterState,
+	code_started: Instant,
 	is_maximized: bool,
 }
 
@@ -52,6 +54,7 @@ fn new() -> AppState {
 		data_frame,
 		status: "".to_string(),
 		adapter_state: AdapterState::default(),
+		code_started: Instant::now(),
 		is_maximized: false,
 	}
 }
@@ -135,6 +138,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				let code = app_state.code.text().clone();
 				let db = db.clone();
 				app_state.status = "Code running...".into();
+				app_state.code_started = Instant::now();
 				return Task::perform(
 					async move { db.execute(&code).await.unwrap() },
 					Message::DataTable,
@@ -143,7 +147,8 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		},
 		Message::DataTable(df) => {
 			app_state.data_frame = df;
-			app_state.status = "Code finished.".into();
+			let time_elapsed = (app_state.code_started.elapsed().as_millis() as f64) / 1000.0;
+			app_state.status = format!("Code finished: {time_elapsed}s");
 		}
 		_ => {}
 	}
