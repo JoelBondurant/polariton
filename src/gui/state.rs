@@ -8,10 +8,7 @@ use iced::{
 	widget::{pane_grid, text_editor},
 	window, Element, Size, Task,
 };
-use polars::frame::column::Column;
 use polars::frame::DataFrame;
-use polars::prelude::NamedFrom;
-use polars::series::Series;
 
 struct AppState {
 	panes: pane_grid::State<PaneType>,
@@ -42,24 +39,7 @@ pub fn run() -> Result {
 }
 
 fn new() -> AppState {
-	let alpha_repeat = 3;
-	let header = (1..=alpha_repeat)
-		.flat_map(|i| (b'a'..=b'z').map(move |ch| format!("{0}{0}{0}{1}", ch as char, i)))
-		.collect::<Vec<String>>();
-	let mut data = vec![];
-	for offset in 0..26 * alpha_repeat {
-		let col = (1..=1_000_000)
-			.map(|nx| (nx + offset).to_string())
-			.collect::<Vec<String>>();
-		data.push(col);
-	}
-	let height = data.get(0).unwrap_or(&Default::default()).len();
-	let series_vec = header
-		.into_iter()
-		.zip(data.into_iter())
-		.map(|(name, col)| Column::from(Series::new(name.into(), col)))
-		.collect::<Vec<Column>>();
-	let data_frame = DataFrame::new(height, series_vec).unwrap_or(Default::default());
+	let data_frame = DataFrame::default();
 	let (mut panes, editor_pane) = pane_grid::State::new(PaneType::CodeEditor);
 	let _ = panes.split(
 		pane_grid::Axis::Horizontal,
@@ -162,7 +142,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			}
 		},
 		Message::DataTable(df) => {
-			println!("DataFrame: {:?}", df);
+			app_state.data_frame = df;
 			app_state.status = "Code finished.".into();
 		}
 		_ => {}
