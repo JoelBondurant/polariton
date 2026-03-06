@@ -23,7 +23,7 @@ const HEADER_HEIGHT: f32 = 32.0;
 const CELL_PADDING_X: f32 = 8.0;
 const FONT_SIZE: f32 = 13.0;
 const MIN_COL_WIDTH: f32 = 28.0;
-const DEFAULT_COL_WIDTH: f32 = 80.0;
+const MAX_COL_WIDTH: f32 = 320.0;
 const V_SCROLLBAR_WIDTH: f32 = 12.0;
 const H_SCROLLBAR_HEIGHT: f32 = 12.0;
 const COL_RESIZE_GRAB_ZONE: f32 = 4.0;
@@ -56,19 +56,34 @@ impl<'a> Table<'a> {
 		self.data_frame.height()
 	}
 
-	fn default_col_width(&self, viewport_width: f32) -> f32 {
-		if let Some(w) = self.col_width {
-			return w.max(DEFAULT_COL_WIDTH);
-		}
-		let n = self.col_count().max(1) as f32;
-		(viewport_width / n).max(DEFAULT_COL_WIDTH)
+	fn measure_col_width(&self, col_idx: usize) -> f32 {
+		let col_name = self
+			.data_frame
+			.get_column_names()
+			.get(col_idx)
+			.map(|s| s.as_str())
+			.unwrap_or("");
+		let sample_rows = self.data_frame.height().min(100);
+		let max_content_chars = (0..sample_rows)
+			.map(|row| self.cell_str(col_idx, row).len())
+			.max()
+			.unwrap_or(0);
+		let max_chars = max_content_chars.max(col_name.len());
+		let text_width = max_chars as f32 * FONT_SIZE * 0.6;
+		(text_width + CELL_PADDING_X * 2.0).clamp(MIN_COL_WIDTH, MAX_COL_WIDTH)
 	}
 
 	fn col_widths<'s>(&self, state: &'s mut TableState, viewport_width: f32) -> &'s [f32] {
 		let col_count = self.col_count();
 		if state.col_widths.len() != col_count {
-			let default = self.default_col_width(viewport_width);
-			state.col_widths = vec![default; col_count];
+			state.col_widths = (0..col_count).map(|i| self.measure_col_width(i)).collect();
+			let total: f32 = state.col_widths.iter().sum();
+			if total < viewport_width {
+				let scale = viewport_width / total;
+				for w in &mut state.col_widths {
+					*w *= scale;
+				}
+			}
 		}
 		&state.col_widths
 	}
