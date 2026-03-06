@@ -410,12 +410,21 @@ const MODAL_FILL_PORTION_H: u16 = 80;
 fn adapter_gallery_view() -> Element<'static, Message> {
 	let dialog: Element<Message> = container(column![
 		center(text("Select Adapter").size(24)),
-		row![center(styled_button(
-			"SQLite",
-			Message::AdapterSelected(AdapterSelection::SQLite),
-			BUTTON_SIZE_DEFAULT
-		))]
-		.spacing(20),
+		center(
+			row![
+				styled_button(
+					"Parquet",
+					Message::AdapterSelected(AdapterSelection::Parquet),
+					BUTTON_SIZE_DEFAULT
+				),
+				styled_button(
+					"SQLite",
+					Message::AdapterSelected(AdapterSelection::SQLite),
+					BUTTON_SIZE_DEFAULT
+				)
+			]
+			.spacing(20)
+		)
 	])
 	.width(FillPortion(MODAL_FILL_PORTION_H))
 	.height(FillPortion(MODAL_FILL_PORTION_V))

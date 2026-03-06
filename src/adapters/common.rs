@@ -47,5 +47,5 @@ pub enum ExecutionResult {
 
 #[async_trait]
 pub trait DatabaseAdapter: Send + Sync + 'static {
-	async fn dispatch(&self, code: &str) -> ExecutionResult;
+	async fn dispatch(&mut self, code: &str) -> ExecutionResult;
 }

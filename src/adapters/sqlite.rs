@@ -27,7 +27,7 @@ const DIALECT: SQLiteDialect = SQLiteDialect {};
 
 #[async_trait]
 impl DatabaseAdapter for SQLiteAdapter {
-	async fn dispatch(&self, code: &str) -> ExecutionResult {
+	async fn dispatch(&mut self, code: &str) -> ExecutionResult {
 		let code = code.to_string();
 		let ast = match Parser::parse_sql(&DIALECT, &code) {
 			Ok(nodes) => nodes,

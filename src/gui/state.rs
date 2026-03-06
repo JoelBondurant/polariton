@@ -139,14 +139,20 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			app_state.adapter_state.stage = AdapterStage::Connected;
 			app_state.status = "Adapter connected.".into();
 		}
-		Message::Run => match &app_state.adapter_state.connection {
+		Message::Run => match &mut app_state.adapter_state.connection {
 			None => {}
 			Some(db) => {
 				let code = app_state.code_editor.content();
 				let db = db.clone();
 				app_state.status = "Code running...".into();
 				app_state.code_started = Instant::now();
-				return Task::perform(async move { db.dispatch(&code).await }, Message::RunResult);
+				return Task::perform(
+					async move {
+						let mut guard = db.write().await;
+						guard.dispatch(&code).await
+					},
+					Message::RunResult,
+				);
 			}
 		},
 		Message::RunResult(er) => {

@@ -5,12 +5,13 @@ use crate::adapters::{
 use iced::{widget::pane_grid, window};
 use iced_code_editor::Message as EditorMessage;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub enum Message {
 	AdapterConfigurationChanged(String, String),
 	AdapterConfigurationSubmitted,
-	AdapterConnected(Option<Arc<dyn DatabaseAdapter>>),
+	AdapterConnected(Option<Arc<RwLock<dyn DatabaseAdapter>>>),
 	AdapterSelected(AdapterSelection),
 	CloseWindow,
 	CodeEditEvent(EditorMessage),
