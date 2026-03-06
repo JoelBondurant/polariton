@@ -1,5 +1,7 @@
-use crate::adapters::common::ExecutionResult;
-use crate::adapters::{common::AdapterStage, driver::AdapterState};
+use crate::adapters::{
+	common::{AdapterStage, ExecutionResult},
+	driver::AdapterState,
+};
 use crate::gui::{
 	components::{self, PaneType},
 	messages::Message,
@@ -143,16 +145,34 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				return Task::perform(async move { db.dispatch(&code).await }, Message::RunResult);
 			}
 		},
-		Message::RunResult(er) => match er {
-			ExecutionResult::Rows(df) => {
-				app_state.data_frame = df;
-				let time_elapsed = (app_state.code_started.elapsed().as_millis() as f64) / 1000.0;
-				app_state.status = format!("Code finished: {time_elapsed}s");
+		Message::RunResult(er) => {
+			let time_elapsed = (app_state.code_started.elapsed().as_millis() as f64) / 1000.0;
+			match er {
+				ExecutionResult::Affected(rows_affected) => {
+					app_state.status = format!("Rows affected: {rows_affected} in {time_elapsed}s");
+				}
+				ExecutionResult::Batch(ver) => {
+					let msg = ver
+						.into_iter()
+						.map(|er| format!("{:?}", er))
+						.collect::<String>();
+					app_state.status = format!("Batch complete {msg} in {time_elapsed}s");
+				}
+				ExecutionResult::CommandCompleted(msg) => {
+					app_state.status = format!("Command complete {msg} in {time_elapsed}s");
+				}
+				ExecutionResult::Err(msg) => {
+					app_state.status = format!("Error {msg} in {time_elapsed}s");
+				}
+				ExecutionResult::Rows(df) => {
+					app_state.data_frame = df;
+					app_state.status = format!("Code finished: {time_elapsed}s");
+				}
+				ExecutionResult::None => {
+					app_state.status = format!("Noop finished: {time_elapsed}s");
+				}
 			}
-			_ => {
-				println!("Not yet implemented.");
-			}
-		},
+		}
 		_ => {}
 	}
 	Task::none()

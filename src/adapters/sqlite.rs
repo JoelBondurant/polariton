@@ -5,6 +5,7 @@ use polars::{
 	frame::{column::Column, DataFrame},
 	series::Series,
 };
+use sqlparser::{ast::Statement, dialect::SQLiteDialect, parser::Parser};
 use tokio_rusqlite::{
 	rusqlite::{types::ValueRef, Connection as SyncConnection},
 	Connection as AsyncConnection,
@@ -22,25 +23,52 @@ pub struct SQLiteAdapter {
 }
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+const DIALECT: SQLiteDialect = SQLiteDialect {};
 
 #[async_trait]
 impl DatabaseAdapter for SQLiteAdapter {
-	async fn dispatch(&self, query: &str) -> ExecutionResult {
-		let query = query.to_string();
-		self.aconn
-			.call(move |conn| sqlite_to_df(conn, &query))
-			.await
-			.map(ExecutionResult::Rows)
-			.unwrap_or_else(|err| ExecutionResult::Err(err.to_string()))
+	async fn dispatch(&self, code: &str) -> ExecutionResult {
+		let code = code.to_string();
+		let ast = match Parser::parse_sql(&DIALECT, &code) {
+			Ok(nodes) => nodes,
+			Err(err) => {
+				return ExecutionResult::Err(format!("SQLite parse error: {}", err));
+			}
+		};
+		match ast.as_slice() {
+			[_, _, ..] => self
+				.aconn
+				.call(move |conn| conn.execute_batch(&code))
+				.await
+				.map(|_| {
+					ExecutionResult::Batch(vec![ExecutionResult::CommandCompleted(
+						"Batch complete.".to_string(),
+					)])
+				})
+				.unwrap_or_else(|err| ExecutionResult::Err(err.to_string())),
+			[Statement::Query(_)] => self
+				.aconn
+				.call(move |conn| sqlite_to_df(conn, &code))
+				.await
+				.map(ExecutionResult::Rows)
+				.unwrap_or_else(|err| ExecutionResult::Err(err.to_string())),
+			[Statement::Insert { .. }] | [Statement::Update { .. }] | [_] => self
+				.aconn
+				.call(move |conn| conn.execute(&code, []))
+				.await
+				.map(|x| ExecutionResult::CommandCompleted(x.to_string()))
+				.unwrap_or_else(|err| ExecutionResult::Err(err.to_string())),
+			[] => ExecutionResult::None,
+		}
 	}
 }
 
-pub fn sqlite_to_df(conn: &SyncConnection, query: &str) -> Result<DataFrame, BoxError> {
-	let mut stmt = conn.prepare(query)?;
+pub fn sqlite_to_df(conn: &SyncConnection, code: &str) -> Result<DataFrame, BoxError> {
+	let mut stmt = conn.prepare(code)?;
 	let col_names: Vec<String> = stmt.column_names().into_iter().map(String::from).collect();
 	let width = col_names.len();
 	let total_rows: usize =
-		conn.query_row(&format!("select count(1) from ({})", query), [], |row| {
+		conn.query_row(&format!("select count(1) from ({})", code), [], |row| {
 			row.get(0)
 		})?;
 	let mut column_data: Vec<Vec<AnyValue>> = vec![Vec::with_capacity(total_rows); width];
