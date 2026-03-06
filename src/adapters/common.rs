@@ -24,9 +24,28 @@ pub struct AdapterField {
 	pub is_secure: bool,
 }
 
-type BoxError = Box<dyn std::error::Error + Send + Sync>;
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub enum QueryType {
+	Read,
+	Write,
+	Schema,
+	Control,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default)]
+pub enum ExecutionResult {
+	#[default]
+	None,
+	Affected(u64),
+	Batch(Vec<ExecutionResult>),
+	CommandCompleted(String),
+	Err(String),
+	Rows(DataFrame),
+}
 
 #[async_trait]
 pub trait DatabaseAdapter: Send + Sync + 'static {
-	async fn execute(&self, query: &str) -> Result<DataFrame, BoxError>;
+	async fn dispatch(&self, code: &str) -> ExecutionResult;
 }

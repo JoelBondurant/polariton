@@ -1,21 +1,22 @@
-use crate::adapters::{common::DatabaseAdapter, driver::AdapterSelection};
+use crate::adapters::{
+	common::{DatabaseAdapter, ExecutionResult},
+	driver::AdapterSelection,
+};
 use iced::{
 	widget::{pane_grid, text_editor},
 	window,
 };
-use polars::frame::DataFrame;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum Message {
-	AdapterSelected(AdapterSelection),
 	AdapterConfigurationChanged(String, String),
 	AdapterConfigurationSubmitted,
 	AdapterConnected(Option<Arc<dyn DatabaseAdapter>>),
+	AdapterSelected(AdapterSelection),
 	CloseWindow,
 	CodeAction(text_editor::Action),
 	Connect,
-	DataTable(DataFrame),
 	DragWindow,
 	MaximizeWindow,
 	MinimizeWindow,
@@ -23,4 +24,5 @@ pub enum Message {
 	PaneResized(pane_grid::ResizeEvent),
 	ResizeWindow(window::Direction),
 	Run,
+	RunResult(ExecutionResult),
 }

@@ -49,9 +49,7 @@ impl AdapterState {
 		}
 	}
 
-	pub async fn establish_connection(
-		config: AdapterConfiguration,
-	) -> Option<Arc<dyn DatabaseAdapter>> {
+	pub async fn connect(config: AdapterConfiguration) -> Option<Arc<dyn DatabaseAdapter>> {
 		match config {
 			AdapterConfiguration::None => None,
 			AdapterConfiguration::SQLite { connection_string } => {

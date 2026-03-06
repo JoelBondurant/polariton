@@ -1,3 +1,4 @@
+use crate::adapters::common::ExecutionResult;
 use crate::adapters::{common::AdapterStage, driver::AdapterState};
 use crate::gui::{
 	components::{self, PaneType},
@@ -123,7 +124,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			app_state.adapter_state.stage = AdapterStage::Configured;
 			let config = app_state.adapter_state.configuration.clone();
 			return Task::perform(
-				async move { AdapterState::establish_connection(config).await },
+				async move { AdapterState::connect(config).await },
 				Message::AdapterConnected,
 			);
 		}
@@ -139,17 +140,19 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				let db = db.clone();
 				app_state.status = "Code running...".into();
 				app_state.code_started = Instant::now();
-				return Task::perform(
-					async move { db.execute(&code).await.unwrap() },
-					Message::DataTable,
-				);
+				return Task::perform(async move { db.dispatch(&code).await }, Message::RunResult);
 			}
 		},
-		Message::DataTable(df) => {
-			app_state.data_frame = df;
-			let time_elapsed = (app_state.code_started.elapsed().as_millis() as f64) / 1000.0;
-			app_state.status = format!("Code finished: {time_elapsed}s");
-		}
+		Message::RunResult(er) => match er {
+			ExecutionResult::Rows(df) => {
+				app_state.data_frame = df;
+				let time_elapsed = (app_state.code_started.elapsed().as_millis() as f64) / 1000.0;
+				app_state.status = format!("Code finished: {time_elapsed}s");
+			}
+			_ => {
+				println!("Not yet implemented.");
+			}
+		},
 		_ => {}
 	}
 	Task::none()

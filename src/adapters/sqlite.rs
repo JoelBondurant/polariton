@@ -1,4 +1,4 @@
-use crate::adapters::common::{AdapterField, AdapterFieldType, DatabaseAdapter};
+use crate::adapters::common::{AdapterField, AdapterFieldType, DatabaseAdapter, ExecutionResult};
 use async_trait::async_trait;
 use polars::{
 	datatypes::AnyValue,
@@ -25,14 +25,13 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 #[async_trait]
 impl DatabaseAdapter for SQLiteAdapter {
-	async fn execute(&self, query: &str) -> Result<DataFrame, BoxError> {
+	async fn dispatch(&self, query: &str) -> ExecutionResult {
 		let query = query.to_string();
-		let df = self
-			.aconn
+		self.aconn
 			.call(move |conn| sqlite_to_df(conn, &query))
 			.await
-			.map_err(|err| err.to_string())?;
-		Ok(df)
+			.map(ExecutionResult::Rows)
+			.unwrap_or_else(|err| ExecutionResult::Err(err.to_string()))
 	}
 }
 
