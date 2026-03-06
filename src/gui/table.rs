@@ -130,17 +130,33 @@ impl<'a> Table<'a> {
 		edges
 	}
 
+	fn row_num_width(&self, bounds: Rectangle, v_scroll: f64) -> f32 {
+		let first_visible = (v_scroll / ROW_HEIGHT as f64).floor() as usize;
+		let visible_count = ((bounds.height - HEADER_HEIGHT) / ROW_HEIGHT).ceil() as usize + 1;
+		let max_idx = self.row_offset + first_visible + visible_count + 1;
+		let digits = if max_idx > 0 {
+			(max_idx as f64).log10().floor() as f32 + 1.0
+		} else {
+			1.0
+		};
+		(digits * FONT_SIZE * 0.6 + CELL_PADDING_X * 2.0).max(MIN_COL_WIDTH)
+	}
+
 	fn divider_at_cursor(
 		&self,
 		state: &TableState,
 		bounds: Rectangle,
 		cursor_x: f32,
 		cursor_y: f32,
+		row_num_w: f32,
 	) -> Option<usize> {
 		if cursor_y < bounds.y || cursor_y > bounds.y + HEADER_HEIGHT {
 			return None;
 		}
-		let content_x = cursor_x - bounds.x + state.h_scroll_offset as f32;
+		if cursor_x < bounds.x + row_num_w {
+			return None;
+		}
+		let content_x = cursor_x - (bounds.x + row_num_w) + state.h_scroll_offset as f32;
 		let edges = self.col_left_edges(state);
 		for (i, &left) in edges.iter().enumerate() {
 			let divider_x = left + state.col_widths[i];
@@ -156,12 +172,14 @@ impl<'a> Table<'a> {
 		bounds: Rectangle,
 		h_scroll_offset: f64,
 		state: &TableState,
+		row_num_w: f32,
 	) -> Rectangle {
 		let total_w = self.total_content_width(state);
-		let track_w = bounds.width - V_SCROLLBAR_WIDTH;
+		let track_w = bounds.width - V_SCROLLBAR_WIDTH - row_num_w;
 		let thumb_w = (track_w * (track_w / total_w.max(1.0))).max(20.0);
 		let max_scroll = (total_w - track_w).max(0.0);
 		let thumb_x = bounds.x
+			+ row_num_w
 			+ if max_scroll > 0.0 {
 				h_scroll_offset as f32 / max_scroll * (track_w - thumb_w)
 			} else {
@@ -244,17 +262,15 @@ where
 		_renderer: &Renderer,
 	) -> Interaction {
 		let state = tree.state.downcast_ref::<TableState>();
+		let bounds = layout.bounds();
+		let row_num_w = self.row_num_width(bounds, state.v_scroll_offset);
 		if state.resizing_col.is_some() {
 			return Interaction::ResizingHorizontally;
 		}
-		if let Some(pos) = cursor.position() {
-			let bounds = layout.bounds();
-			if self
-				.divider_at_cursor(state, bounds, pos.x, pos.y)
-				.is_some()
-			{
-				return Interaction::ResizingHorizontally;
-			}
+		if let Some(pos) = cursor.position() && self
+				.divider_at_cursor(state, bounds, pos.x, pos.y, row_num_w)
+				.is_some() {
+			return Interaction::ResizingHorizontally;
 		}
 		Interaction::default()
 	}
@@ -271,23 +287,23 @@ where
 		_viewport: &Rectangle,
 	) {
 		let bounds = layout.bounds();
-		let viewport_w = bounds.width - V_SCROLLBAR_WIDTH;
-		{
-			let state = tree.state.downcast_mut::<TableState>();
-			self.col_widths(state, viewport_w);
-		}
 		let state = tree.state.downcast_mut::<TableState>();
+		let row_num_w = self.row_num_width(bounds, state.v_scroll_offset);
+		let viewport_w = bounds.width - V_SCROLLBAR_WIDTH - row_num_w;
+		self.col_widths(state, viewport_w);
 		let total_h = self.total_content_height();
 		let total_w = self.total_content_width(state);
 		let viewport_h = bounds.height - H_SCROLLBAR_HEIGHT;
 		let max_v_scroll = (total_h - viewport_h).max(0.0) as f64;
 		let max_h_scroll = (total_w - viewport_w).max(0.0) as f64;
 		let v_thumb = self.v_scrollbar_thumb_rect(bounds, state.v_scroll_offset);
-		let h_thumb = self.h_scrollbar_thumb_rect(bounds, state.h_scroll_offset, state);
+		let h_thumb = self.h_scrollbar_thumb_rect(bounds, state.h_scroll_offset, state, row_num_w);
 		match event {
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
 				if let Some(pos) = cursor.position() {
-					if let Some(col_idx) = self.divider_at_cursor(state, bounds, pos.x, pos.y) {
+					if let Some(col_idx) =
+						self.divider_at_cursor(state, bounds, pos.x, pos.y, row_num_w)
+					{
 						state.resizing_col = Some(col_idx);
 						state.resize_drag_start_x = pos.x;
 						state.resize_drag_start_width = state.col_widths[col_idx];
@@ -427,8 +443,9 @@ where
 			return;
 		}
 		let bounds = layout.bounds();
-		let viewport_w = bounds.width - V_SCROLLBAR_WIDTH;
 		let v_scroll = state.v_scroll_offset;
+		let row_num_w = self.row_num_width(bounds, v_scroll);
+		let viewport_w = bounds.width - V_SCROLLBAR_WIDTH - row_num_w;
 		let h_scroll = state.h_scroll_offset as f32;
 		renderer.fill_quad(
 			renderer::Quad {
@@ -439,8 +456,44 @@ where
 			colors::BG_PRIMARY,
 		);
 		renderer.with_layer(bounds, |renderer| {
+			renderer.fill_quad(
+				renderer::Quad {
+					bounds: Rectangle {
+						x: bounds.x,
+						y: bounds.y,
+						width: row_num_w,
+						height: HEADER_HEIGHT,
+					},
+					..renderer::Quad::default()
+				},
+				colors::BG_SECONDARY,
+			);
+			draw_text(
+				renderer,
+				"#",
+				Rectangle {
+					x: bounds.x + CELL_PADDING_X,
+					y: bounds.y,
+					width: row_num_w - CELL_PADDING_X,
+					height: HEADER_HEIGHT,
+				},
+				colors::TABLE_TEXT_HEADER,
+				true,
+			);
+			renderer.fill_quad(
+				renderer::Quad {
+					bounds: Rectangle {
+						x: bounds.x + row_num_w - 1.0,
+						y: bounds.y,
+						width: 1.0,
+						height: bounds.height - H_SCROLLBAR_HEIGHT,
+					},
+					..renderer::Quad::default()
+				},
+				colors::TABLE_BORDER,
+			);
 			let header_clip = Rectangle {
-				x: bounds.x,
+				x: bounds.x + row_num_w,
 				y: bounds.y,
 				width: viewport_w,
 				height: HEADER_HEIGHT,
@@ -454,10 +507,12 @@ where
 			);
 			renderer.with_layer(header_clip, |renderer| {
 				let col_widths = self.col_widths_ref(state);
-				let mut cell_x = bounds.x - h_scroll;
+				let mut cell_x = bounds.x + row_num_w - h_scroll;
 				for (col_idx, field) in self.data_frame.get_column_names().iter().enumerate() {
 					let col_w = col_widths[col_idx];
-					if cell_x + col_w >= bounds.x && cell_x <= bounds.x + viewport_w {
+					if cell_x + col_w >= bounds.x + row_num_w
+						&& cell_x <= bounds.x + row_num_w + viewport_w
+					{
 						if col_idx > 0 {
 							renderer.fill_quad(
 								renderer::Quad {
@@ -493,28 +548,26 @@ where
 					bounds: Rectangle {
 						x: bounds.x,
 						y: bounds.y + HEADER_HEIGHT - 1.0,
-						width: viewport_w,
+						width: bounds.width - V_SCROLLBAR_WIDTH,
 						height: 1.0,
 					},
 					..renderer::Quad::default()
 				},
 				colors::TABLE_BORDER,
 			);
-			let rows_clip = Rectangle {
+			let first_visible = (v_scroll / ROW_HEIGHT as f64).floor() as usize;
+			let visible_count = ((bounds.height - HEADER_HEIGHT) / ROW_HEIGHT).ceil() as usize + 1;
+			let loaded = self.loaded_row_count();
+			let first_visible_y = bounds.y
+				+ HEADER_HEIGHT
+				+ (first_visible as f64 * ROW_HEIGHT as f64 - v_scroll) as f32;
+			let row_num_clip = Rectangle {
 				x: bounds.x,
 				y: bounds.y + HEADER_HEIGHT,
-				width: viewport_w,
+				width: row_num_w,
 				height: bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT,
 			};
-			renderer.with_layer(rows_clip, |renderer| {
-				let first_visible = (v_scroll / ROW_HEIGHT as f64).floor() as usize;
-				let visible_count =
-					((bounds.height - HEADER_HEIGHT) / ROW_HEIGHT).ceil() as usize + 1;
-				let loaded = self.loaded_row_count();
-				let col_widths = self.col_widths_ref(state);
-				let first_visible_y = bounds.y
-					+ HEADER_HEIGHT + (first_visible as f64 * ROW_HEIGHT as f64
-					- v_scroll) as f32;
+			renderer.with_layer(row_num_clip, |renderer| {
 				for row_offset in 0..=visible_count {
 					let row_idx = first_visible + row_offset;
 					if row_idx >= loaded {
@@ -525,6 +578,63 @@ where
 						continue;
 					}
 					let abs_idx = self.row_offset + row_idx;
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds: Rectangle {
+								x: bounds.x,
+								y: row_y,
+								width: row_num_w,
+								height: ROW_HEIGHT,
+							},
+							..renderer::Quad::default()
+						},
+						colors::BG_SECONDARY,
+					);
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds: Rectangle {
+								x: bounds.x,
+								y: row_y + ROW_HEIGHT - 1.0,
+								width: row_num_w,
+								height: 1.0,
+							},
+							..renderer::Quad::default()
+						},
+						colors::TABLE_BORDER,
+					);
+					draw_text(
+						renderer,
+						&(abs_idx + 1).to_string(),
+						Rectangle {
+							x: bounds.x + CELL_PADDING_X,
+							y: row_y,
+							width: row_num_w - CELL_PADDING_X,
+							height: ROW_HEIGHT,
+						},
+						colors::TABLE_TEXT_HEADER,
+						true,
+					);
+				}
+			});
+			let rows_clip = Rectangle {
+				x: bounds.x + row_num_w,
+				y: bounds.y + HEADER_HEIGHT,
+				width: viewport_w,
+				height: bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT,
+			};
+			renderer.with_layer(rows_clip, |renderer| {
+				let col_widths = self.col_widths_ref(state);
+				for row_offset in 0..=visible_count {
+					let row_idx = first_visible + row_offset;
+					if row_idx >= loaded {
+						break;
+					}
+					let row_y = first_visible_y + row_offset as f32 * ROW_HEIGHT;
+					if row_y + ROW_HEIGHT < bounds.y + HEADER_HEIGHT {
+						continue;
+					}
+					let abs_idx = self.row_offset + row_idx;
+
 					let row_bg = if abs_idx.is_multiple_of(2) {
 						colors::TABLE_ROW_EVEN
 					} else {
@@ -533,7 +643,7 @@ where
 					renderer.fill_quad(
 						renderer::Quad {
 							bounds: Rectangle {
-								x: bounds.x,
+								x: bounds.x + row_num_w,
 								y: row_y,
 								width: viewport_w,
 								height: ROW_HEIGHT,
@@ -545,7 +655,7 @@ where
 					renderer.fill_quad(
 						renderer::Quad {
 							bounds: Rectangle {
-								x: bounds.x,
+								x: bounds.x + row_num_w,
 								y: row_y + ROW_HEIGHT - 1.0,
 								width: viewport_w,
 								height: 1.0,
@@ -554,9 +664,11 @@ where
 						},
 						colors::TABLE_BORDER,
 					);
-					let mut cell_x = bounds.x - h_scroll;
+					let mut cell_x = bounds.x + row_num_w - h_scroll;
 					for (col_idx, &col_w) in col_widths.iter().enumerate() {
-						if cell_x + col_w >= bounds.x && cell_x <= bounds.x + viewport_w {
+						if cell_x + col_w >= bounds.x + row_num_w
+							&& cell_x <= bounds.x + row_num_w + viewport_w
+						{
 							if col_idx > 0 {
 								renderer.fill_quad(
 									renderer::Quad {
@@ -603,7 +715,8 @@ where
 			}
 			let total_w = self.total_content_width(state);
 			if total_w > viewport_w {
-				let h_thumb = self.h_scrollbar_thumb_rect(bounds, state.h_scroll_offset, state);
+				let h_thumb =
+					self.h_scrollbar_thumb_rect(bounds, state.h_scroll_offset, state, row_num_w);
 				renderer.fill_quad(
 					renderer::Quad {
 						bounds: h_thumb,
