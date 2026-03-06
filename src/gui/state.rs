@@ -6,17 +6,14 @@ use crate::gui::{
 	components::{self, PaneType},
 	messages::Message,
 };
-use iced::{
-	application,
-	widget::{pane_grid, text_editor},
-	window, Element, Size, Task,
-};
+use iced::{application, widget::pane_grid, window, Element, Size, Task};
+use iced_code_editor::CodeEditor;
 use polars::frame::DataFrame;
 use std::time::Instant;
 
 struct AppState {
 	panes: pane_grid::State<PaneType>,
-	code: text_editor::Content,
+	code_editor: CodeEditor,
 	data_frame: DataFrame,
 	status: String,
 	adapter_state: AdapterState,
@@ -51,9 +48,13 @@ fn new() -> AppState {
 		editor_pane,
 		PaneType::DataTable,
 	);
+	let mut code_editor = CodeEditor::new("", "sql");
+	code_editor.set_theme(iced_code_editor::theme::from_iced_theme(
+		&components::theme(),
+	));
 	AppState {
 		panes,
-		code: text_editor::Content::new(),
+		code_editor,
 		data_frame,
 		status: "".to_string(),
 		adapter_state: AdapterState::default(),
@@ -65,7 +66,7 @@ fn new() -> AppState {
 fn view(app_state: &AppState) -> Element<'_, Message> {
 	components::main_screen(
 		&app_state.panes,
-		&app_state.code,
+		&app_state.code_editor,
 		&app_state.data_frame,
 		&app_state.status,
 		&app_state.adapter_state,
@@ -80,8 +81,11 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::DragWindow => {
 			return window::latest().and_then(window::drag);
 		}
-		Message::CodeAction(action) => {
-			app_state.code.perform(action);
+		Message::CodeEditEvent(edit_event) => {
+			return app_state
+				.code_editor
+				.update(&edit_event)
+				.map(Message::CodeEditEvent);
 		}
 		Message::MaximizeWindow => {
 			app_state.is_maximized = !app_state.is_maximized;
@@ -138,7 +142,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::Run => match &app_state.adapter_state.connection {
 			None => {}
 			Some(db) => {
-				let code = app_state.code.text().clone();
+				let code = app_state.code_editor.content();
 				let db = db.clone();
 				app_state.status = "Code running...".into();
 				app_state.code_started = Instant::now();

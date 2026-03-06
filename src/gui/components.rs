@@ -5,16 +5,16 @@ use crate::adapters::{
 use crate::gui::messages::Message;
 use crate::gui::{colors, table::Table};
 use iced::{
-	advanced::text::highlighter::PlainText,
 	border, font, mouse,
 	theme::{Palette, Theme},
 	widget::{
 		button, center, column, container, mouse_area, pane_grid, row, space, stack, text,
-		text_editor, text_input, tooltip, TextEditor, TextInput, Tooltip,
+		text_input, tooltip, TextInput, Tooltip,
 	},
 	window::Direction,
 	Alignment, Background, Center, Color, Element, Fill, FillPortion, Font, Length,
 };
+use iced_code_editor::CodeEditor;
 use polars::frame::DataFrame;
 
 pub const BUTTON_SIZE_DEFAULT: (u32, u32) = (120, 40);
@@ -158,18 +158,29 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 
 pub fn main_screen<'a>(
 	panes: &'a pane_grid::State<PaneType>,
-	code: &'a text_editor::Content,
+	code_editor: &'a CodeEditor,
 	data_frame: &'a DataFrame,
 	status: &'a str,
 	adapter_state: &'a AdapterState,
 ) -> Element<'a, Message> {
 	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
-		PaneType::CodeEditor => pane_grid::Content::new(center(styled_tooltip(
-			styled_text_editor("code".into(), code).on_action(Message::CodeAction),
-			"Code  ",
-		)))
+		PaneType::CodeEditor => pane_grid::Content::new(center(
+			container(styled_tooltip(
+				code_editor.view().map(Message::CodeEditEvent),
+				"Code  ",
+			))
+			.padding(1)
+			.style(|_| container::Style {
+				border: border::Border {
+					color: colors::BORDER_PRIMARY,
+					width: 1.0,
+					radius: 5.0.into(),
+				},
+				..Default::default()
+			}),
+		))
 		.title_bar(pane_grid::TitleBar::new(text(""))),
-		PaneType::DataTable => pane_grid::Content::new(center(Table::new(&data_frame, 0)))
+		PaneType::DataTable => pane_grid::Content::new(center(Table::new(data_frame, 0)))
 			.title_bar(pane_grid::TitleBar::new(text(""))),
 	})
 	.width(Fill)
@@ -381,52 +392,6 @@ pub fn styled_button<'a, Message: Clone + 'a>(
 	})
 	.on_press(msg)
 	.into()
-}
-
-fn styled_text_editor<'a>(
-	id: String,
-	content: &'a text_editor::Content,
-) -> TextEditor<'a, PlainText, Message> {
-	text_editor(content)
-		.id(id)
-		.size(18)
-		.height(Fill)
-		.wrapping(text::Wrapping::Word)
-		.style(|_theme: &Theme, status: text_editor::Status| match status {
-			text_editor::Status::Focused { .. } => text_editor::Style {
-				background: Background::Color(colors::BG_INPUT_FOCUS),
-				border: border::Border {
-					color: colors::BORDER_ACCENT,
-					width: 2.0,
-					radius: 5.0.into(),
-				},
-				placeholder: colors::TEXT_PLACEHOLDER_HOVER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-			text_editor::Status::Hovered => text_editor::Style {
-				background: Background::Color(colors::BG_INPUT_HOVER),
-				border: border::Border {
-					color: colors::BORDER_HOVER,
-					width: 1.5,
-					radius: 5.0.into(),
-				},
-				placeholder: colors::TEXT_PLACEHOLDER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-			_ => text_editor::Style {
-				background: Background::Color(colors::BG_INPUT),
-				border: border::Border {
-					color: colors::BORDER_PRIMARY,
-					width: 1.0,
-					radius: 5.0.into(),
-				},
-				placeholder: colors::TEXT_PLACEHOLDER,
-				value: colors::TEXT_SECONDARY,
-				selection: colors::SELECTION,
-			},
-		})
 }
 
 pub fn adapter_view(adapter_state: &AdapterState) -> Element<'static, Message> {

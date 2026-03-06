@@ -2,10 +2,8 @@ use crate::adapters::{
 	common::{DatabaseAdapter, ExecutionResult},
 	driver::AdapterSelection,
 };
-use iced::{
-	widget::{pane_grid, text_editor},
-	window,
-};
+use iced::{widget::pane_grid, window};
+use iced_code_editor::Message as EditorMessage;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -15,7 +13,7 @@ pub enum Message {
 	AdapterConnected(Option<Arc<dyn DatabaseAdapter>>),
 	AdapterSelected(AdapterSelection),
 	CloseWindow,
-	CodeAction(text_editor::Action),
+	CodeEditEvent(EditorMessage),
 	Connect,
 	DragWindow,
 	MaximizeWindow,
