@@ -125,7 +125,7 @@ impl<'a> Table<'a> {
 		if cursor_y < bounds.y || cursor_y > bounds.y + HEADER_HEIGHT {
 			return None;
 		}
-		let content_x = cursor_x - bounds.x + state.h_scroll_offset;
+		let content_x = cursor_x - bounds.x + state.h_scroll_offset as f32;
 		let edges = self.col_left_edges(state);
 		for (i, &left) in edges.iter().enumerate() {
 			let divider_x = left + state.col_widths[i];
@@ -139,7 +139,7 @@ impl<'a> Table<'a> {
 	fn h_scrollbar_thumb_rect(
 		&self,
 		bounds: Rectangle,
-		h_scroll_offset: f32,
+		h_scroll_offset: f64,
 		state: &TableState,
 	) -> Rectangle {
 		let total_w = self.total_content_width(state);
@@ -148,7 +148,7 @@ impl<'a> Table<'a> {
 		let max_scroll = (total_w - track_w).max(0.0);
 		let thumb_x = bounds.x
 			+ if max_scroll > 0.0 {
-				h_scroll_offset / max_scroll * (track_w - thumb_w)
+				h_scroll_offset as f32 / max_scroll * (track_w - thumb_w)
 			} else {
 				0.0
 			};
@@ -160,7 +160,7 @@ impl<'a> Table<'a> {
 		}
 	}
 
-	fn v_scrollbar_thumb_rect(&self, bounds: Rectangle, v_scroll_offset: f32) -> Rectangle {
+	fn v_scrollbar_thumb_rect(&self, bounds: Rectangle, v_scroll_offset: f64) -> Rectangle {
 		let total_h = self.total_content_height();
 		let track_h = bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT;
 		let thumb_h = (track_h * (track_h / (total_h - HEADER_HEIGHT).max(1.0))).max(20.0);
@@ -168,7 +168,7 @@ impl<'a> Table<'a> {
 		let thumb_y = bounds.y
 			+ HEADER_HEIGHT
 			+ if max_scroll > 0.0 {
-				v_scroll_offset / max_scroll * (track_h - thumb_h)
+				v_scroll_offset as f32 / max_scroll * (track_h - thumb_h)
 			} else {
 				0.0
 			};
@@ -187,14 +187,14 @@ pub struct TableState {
 	resizing_col: Option<usize>,
 	resize_drag_start_x: f32,
 	resize_drag_start_width: f32,
-	h_drag_start_offset: f32,
+	h_drag_start_offset: f64,
 	h_drag_start_x: f32,
 	h_dragging_scrollbar: bool,
-	h_scroll_offset: f32,
-	v_drag_start_offset: f32,
+	h_scroll_offset: f64,
+	v_drag_start_offset: f64,
 	v_drag_start_y: f32,
 	v_dragging_scrollbar: bool,
-	v_scroll_offset: f32,
+	v_scroll_offset: f64,
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Table<'_>
@@ -265,8 +265,8 @@ where
 		let total_h = self.total_content_height();
 		let total_w = self.total_content_width(state);
 		let viewport_h = bounds.height - H_SCROLLBAR_HEIGHT;
-		let max_v_scroll = (total_h - viewport_h).max(0.0);
-		let max_h_scroll = (total_w - viewport_w).max(0.0);
+		let max_v_scroll = (total_h - viewport_h).max(0.0) as f64;
+		let max_h_scroll = (total_w - viewport_w).max(0.0) as f64;
 		let v_thumb = self.v_scrollbar_thumb_rect(bounds, state.v_scroll_offset);
 		let h_thumb = self.h_scrollbar_thumb_rect(bounds, state.h_scroll_offset, state);
 		match event {
@@ -298,14 +298,14 @@ where
 					state.col_widths[col_idx] =
 						(state.resize_drag_start_width + delta).max(MIN_COL_WIDTH);
 					let new_total_w = self.total_content_width(state);
-					let new_max_h = (new_total_w - viewport_w).max(0.0);
+					let new_max_h = (new_total_w - viewport_w).max(0.0) as f64;
 					state.h_scroll_offset = state.h_scroll_offset.min(new_max_h);
 					shell.request_redraw();
 				} else if state.v_dragging_scrollbar {
 					let drag_delta = position.y - state.v_drag_start_y;
 					let track_h = bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT;
 					let thumb_h = v_thumb.height;
-					let scroll_ratio = drag_delta / (track_h - thumb_h).max(1.0);
+					let scroll_ratio = drag_delta as f64 / (track_h - thumb_h).max(1.0) as f64;
 					state.v_scroll_offset = (state.v_drag_start_offset
 						+ scroll_ratio * max_v_scroll)
 						.clamp(0.0, max_v_scroll);
@@ -314,7 +314,7 @@ where
 					let drag_delta = position.x - state.h_drag_start_x;
 					let track_w = viewport_w;
 					let thumb_w = h_thumb.width;
-					let scroll_ratio = drag_delta / (track_w - thumb_w).max(1.0);
+					let scroll_ratio = drag_delta as f64 / (track_w - thumb_w).max(1.0) as f64;
 					state.h_scroll_offset = (state.h_drag_start_offset
 						+ scroll_ratio * max_h_scroll)
 						.clamp(0.0, max_h_scroll);
@@ -335,27 +335,29 @@ where
 				match delta {
 					ScrollDelta::Lines { x, y } => {
 						if x.abs() > y.abs() {
-							state.h_scroll_offset = (state.h_scroll_offset - x * MIN_COL_WIDTH)
+							state.h_scroll_offset = (state.h_scroll_offset
+								- (*x as f64) * MIN_COL_WIDTH as f64)
 								.clamp(0.0, max_h_scroll);
 						} else {
-							state.v_scroll_offset =
-								(state.v_scroll_offset - y * ROW_HEIGHT).clamp(0.0, max_v_scroll);
+							state.v_scroll_offset = (state.v_scroll_offset
+								- (*y as f64) * ROW_HEIGHT as f64)
+								.clamp(0.0, max_v_scroll);
 						}
 					}
 					ScrollDelta::Pixels { x, y } => {
 						if x.abs() > y.abs() {
 							state.h_scroll_offset =
-								(state.h_scroll_offset - x).clamp(0.0, max_h_scroll);
+								(state.h_scroll_offset - *x as f64).clamp(0.0, max_h_scroll);
 						} else {
 							state.v_scroll_offset =
-								(state.v_scroll_offset - y).clamp(0.0, max_v_scroll);
+								(state.v_scroll_offset - *y as f64).clamp(0.0, max_v_scroll);
 						}
 					}
 				}
 				shell.request_redraw();
 			}
 			Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) if cursor.is_over(bounds) => {
-				let page_size = viewport_h - HEADER_HEIGHT;
+				let page_size = (viewport_h - HEADER_HEIGHT) as f64;
 				match key {
 					keyboard::Key::Named(keyboard::key::Named::PageDown) => {
 						state.v_scroll_offset =
@@ -373,19 +375,19 @@ where
 					}
 					keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
 						state.v_scroll_offset =
-							(state.v_scroll_offset + ROW_HEIGHT).clamp(0.0, max_v_scroll);
+							(state.v_scroll_offset + ROW_HEIGHT as f64).clamp(0.0, max_v_scroll);
 					}
 					keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
 						state.v_scroll_offset =
-							(state.v_scroll_offset - ROW_HEIGHT).clamp(0.0, max_v_scroll);
+							(state.v_scroll_offset - ROW_HEIGHT as f64).clamp(0.0, max_v_scroll);
 					}
 					keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
 						state.h_scroll_offset =
-							(state.h_scroll_offset + MIN_COL_WIDTH).clamp(0.0, max_h_scroll);
+							(state.h_scroll_offset + MIN_COL_WIDTH as f64).clamp(0.0, max_h_scroll);
 					}
 					keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
 						state.h_scroll_offset =
-							(state.h_scroll_offset - MIN_COL_WIDTH).clamp(0.0, max_h_scroll);
+							(state.h_scroll_offset - MIN_COL_WIDTH as f64).clamp(0.0, max_h_scroll);
 					}
 					_ => {}
 				}
@@ -412,7 +414,7 @@ where
 		let bounds = layout.bounds();
 		let viewport_w = bounds.width - V_SCROLLBAR_WIDTH;
 		let v_scroll = state.v_scroll_offset;
-		let h_scroll = state.h_scroll_offset;
+		let h_scroll = state.h_scroll_offset as f32;
 		renderer.fill_quad(
 			renderer::Quad {
 				bounds,
@@ -490,17 +492,20 @@ where
 				height: bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT,
 			};
 			renderer.with_layer(rows_clip, |renderer| {
-				let first_visible = (v_scroll / ROW_HEIGHT).floor() as usize;
+				let first_visible = (v_scroll / ROW_HEIGHT as f64).floor() as usize;
 				let visible_count =
 					((bounds.height - HEADER_HEIGHT) / ROW_HEIGHT).ceil() as usize + 1;
 				let loaded = self.loaded_row_count();
 				let col_widths = self.col_widths_ref(state);
+				let first_visible_y = bounds.y
+					+ HEADER_HEIGHT + (first_visible as f64 * ROW_HEIGHT as f64
+					- v_scroll) as f32;
 				for row_offset in 0..=visible_count {
 					let row_idx = first_visible + row_offset;
 					if row_idx >= loaded {
 						break;
 					}
-					let row_y = bounds.y + HEADER_HEIGHT + row_idx as f32 * ROW_HEIGHT - v_scroll;
+					let row_y = first_visible_y + row_offset as f32 * ROW_HEIGHT;
 					if row_y + ROW_HEIGHT < bounds.y + HEADER_HEIGHT {
 						continue;
 					}
@@ -583,7 +588,7 @@ where
 			}
 			let total_w = self.total_content_width(state);
 			if total_w > viewport_w {
-				let h_thumb = self.h_scrollbar_thumb_rect(bounds, h_scroll, state);
+				let h_thumb = self.h_scrollbar_thumb_rect(bounds, state.h_scroll_offset, state);
 				renderer.fill_quad(
 					renderer::Quad {
 						bounds: h_thumb,
