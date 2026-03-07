@@ -470,7 +470,7 @@ where
 			);
 			draw_text(
 				renderer,
-				"#",
+				"#  ",
 				Rectangle {
 					x: bounds.x + CELL_PADDING_X,
 					y: bounds.y,
@@ -479,6 +479,7 @@ where
 				},
 				colors::TABLE_TEXT_HEADER,
 				true,
+				Horizontal::Center,
 			);
 			renderer.fill_quad(
 				renderer::Quad {
@@ -538,6 +539,7 @@ where
 							},
 							colors::TABLE_TEXT_HEADER,
 							true,
+							Horizontal::Center,
 						);
 					}
 					cell_x += col_w;
@@ -613,6 +615,7 @@ where
 						},
 						colors::TABLE_TEXT_HEADER,
 						true,
+						Horizontal::Left,
 					);
 				}
 			});
@@ -695,6 +698,7 @@ where
 								},
 								colors::TEXT_PRIMARY,
 								false,
+								Horizontal::Left,
 							);
 						}
 						cell_x += col_w;
@@ -736,6 +740,7 @@ fn draw_text<Renderer>(
 	cell_bounds: Rectangle,
 	color: Color,
 	is_bold: bool,
+	align_x: Horizontal,
 ) where
 	Renderer: renderer::Renderer + TextRenderer<Font = iced::Font>,
 {
@@ -747,20 +752,25 @@ fn draw_text<Renderer>(
 	} else {
 		iced::Font::DEFAULT
 	};
+	let x = match align_x {
+		Horizontal::Left => cell_bounds.x,
+		Horizontal::Center => cell_bounds.x + cell_bounds.width / 2.0,
+		Horizontal::Right => cell_bounds.x + cell_bounds.width,
+	};
 	renderer.fill_text(
 		Text {
 			content: content.to_string(),
 			bounds: cell_bounds.size(),
 			size: Pixels(FONT_SIZE),
 			font,
-			align_x: Horizontal::Left.into(),
+			align_x: align_x.into(),
 			align_y: Vertical::Center,
 			line_height: text::LineHeight::default(),
 			shaping: text::Shaping::Basic,
 			wrapping: text::Wrapping::None,
 		},
 		Point {
-			x: cell_bounds.x,
+			x,
 			y: cell_bounds.y + cell_bounds.height / 2.0,
 		},
 		color,
