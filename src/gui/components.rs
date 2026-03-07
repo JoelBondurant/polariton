@@ -418,6 +418,11 @@ fn adapter_gallery_view() -> Element<'static, Message> {
 					BUTTON_SIZE_DEFAULT
 				),
 				styled_button(
+					"Postgres",
+					Message::AdapterSelected(AdapterSelection::Postgres),
+					BUTTON_SIZE_DEFAULT
+				),
+				styled_button(
 					"SQLite",
 					Message::AdapterSelected(AdapterSelection::SQLite),
 					BUTTON_SIZE_DEFAULT

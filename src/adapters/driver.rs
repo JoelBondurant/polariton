@@ -1,6 +1,6 @@
 use crate::adapters::{
 	common::{AdapterField, AdapterStage, DatabaseAdapter},
-	parquet, sqlite,
+	parquet, postgres, sqlite,
 };
 use polars::prelude::{LazyFrame, PlRefPath, ScanArgsParquet};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -11,19 +11,23 @@ use tokio_rusqlite::Connection as AsyncConnection;
 pub enum AdapterSelection {
 	#[default]
 	None,
-	SQLite,
 	Parquet,
+	Postgres,
+	SQLite,
 }
 
 #[derive(Clone, Debug, Default)]
 pub enum AdapterConfiguration {
 	#[default]
 	None,
-	SQLite {
-		connection_string: String,
-	},
 	Parquet {
 		file_path: String,
+	},
+	Postgres {
+		connection_string: String,
+	},
+	SQLite {
+		connection_string: String,
 	},
 }
 
@@ -46,6 +50,15 @@ impl AdapterState {
 			AdapterSelection::Parquet => {
 				let file_path = self.fields.get("file_path").unwrap().clone();
 				self.configuration = AdapterConfiguration::Parquet { file_path };
+				self.stage = AdapterStage::Configured;
+			}
+			AdapterSelection::Postgres => {
+				let connection_string = self
+					.fields
+					.get("connection_string")
+					.unwrap_or(&"postgresql://localhost".to_string())
+					.clone();
+				self.configuration = AdapterConfiguration::Postgres { connection_string };
 				self.stage = AdapterStage::Configured;
 			}
 			AdapterSelection::SQLite => {
@@ -72,6 +85,23 @@ impl AdapterState {
 				context.register(file_prefix, lf);
 				Some(Arc::new(RwLock::new(parquet::ParquetAdapter { context })))
 			}
+			AdapterConfiguration::Postgres { connection_string } => {
+				let (client, connection) = match tokio_postgres::connect(
+					&connection_string,
+					tokio_postgres::NoTls,
+				)
+				.await
+				{
+					Ok(res) => res,
+					Err(_) => return None,
+				};
+				tokio::spawn(async move {
+					if let Err(e) = connection.await {
+						eprintln!("Postgres connection error: {}", e);
+					}
+				});
+				Some(Arc::new(RwLock::new(postgres::PostgresAdapter { client })))
+			}
 			AdapterConfiguration::SQLite { connection_string } => {
 				if connection_string == "memory" {
 					match AsyncConnection::open_in_memory().await.ok() {
@@ -92,7 +122,8 @@ impl AdapterState {
 pub fn fields_for(selection: &AdapterSelection) -> &'static [AdapterField] {
 	match selection {
 		AdapterSelection::None => &[],
-		AdapterSelection::SQLite => sqlite::FIELDS,
 		AdapterSelection::Parquet => parquet::FIELDS,
+		AdapterSelection::Postgres => postgres::FIELDS,
+		AdapterSelection::SQLite => sqlite::FIELDS,
 	}
 }
