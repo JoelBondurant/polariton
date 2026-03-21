@@ -211,9 +211,10 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::ClosePlot(pane) => {
 			if let Some(dashboard) = &mut app_state.dashboard {
-				let _ = dashboard.close(pane);
-				if dashboard.panes.is_empty() {
+				if dashboard.panes.len() <= 1 {
 					app_state.dashboard = None;
+				} else {
+					let _ = dashboard.close(pane);
 				}
 			}
 		}
