@@ -2,7 +2,7 @@ use crate::adapters::{
 	common::{AdapterField, AdapterStage, DatabaseAdapter},
 	parquet, postgres, sqlite,
 };
-use polars::prelude::{LazyFrame, PlRefPath, ScanArgsParquet};
+use polars::prelude::{HiveOptions, LazyFrame, PlRefPath, ScanArgsParquet};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 use tokio::sync::RwLock;
 use tokio_rusqlite::Connection as AsyncConnection;
@@ -21,7 +21,7 @@ pub enum AdapterConfiguration {
 	#[default]
 	None,
 	Parquet {
-		file_path: String,
+		input_path: String,
 	},
 	Postgres {
 		connection_string: String,
@@ -48,8 +48,8 @@ impl AdapterState {
 				self.stage = AdapterStage::Unconfigured;
 			}
 			AdapterSelection::Parquet => {
-				let file_path = self.fields.get("file_path").unwrap().clone();
-				self.configuration = AdapterConfiguration::Parquet { file_path };
+				let input_path = self.fields.get("input_path").unwrap().clone();
+				self.configuration = AdapterConfiguration::Parquet { input_path };
 				self.stage = AdapterStage::Configured;
 			}
 			AdapterSelection::Postgres => {
@@ -76,13 +76,32 @@ impl AdapterState {
 	pub async fn connect(config: AdapterConfiguration) -> Option<Arc<RwLock<dyn DatabaseAdapter>>> {
 		match config {
 			AdapterConfiguration::None => None,
-			AdapterConfiguration::Parquet { file_path } => {
-				let file_path = Path::new(&file_path);
-				let file_prefix = file_path.file_prefix().unwrap().to_str().unwrap_or("");
-				let ref_path = PlRefPath::try_from_path(file_path).unwrap();
-				let lf = LazyFrame::scan_parquet(ref_path, ScanArgsParquet::default()).unwrap();
+			AdapterConfiguration::Parquet { input_path } => {
+				let input_path = Path::new(&input_path);
+				let input_ref_path = PlRefPath::try_from_path(input_path).unwrap();
+				let hive_options = HiveOptions {
+					enabled: Some(input_path.is_dir()),
+					try_parse_dates: true,
+					..Default::default()
+				};
+				let scan_args = ScanArgsParquet {
+					hive_options,
+					..Default::default()
+				};
+				let lf = LazyFrame::scan_parquet(input_ref_path, scan_args).unwrap();
+				let table_name = if input_path.is_file() {
+					input_path
+						.file_prefix()
+						.and_then(|s| s.to_str())
+						.unwrap_or("temp_table")
+				} else {
+					input_path
+						.file_name()
+						.and_then(|s| s.to_str())
+						.unwrap_or("temp_table")
+				};
 				let context = polars::sql::SQLContext::new();
-				context.register(file_prefix, lf);
+				context.register(table_name, lf);
 				Some(Arc::new(RwLock::new(parquet::ParquetAdapter { context })))
 			}
 			AdapterConfiguration::Postgres { connection_string } => {

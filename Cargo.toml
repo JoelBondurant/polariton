@@ -12,12 +12,12 @@ async-trait = "0.1.89"
 bytes = "1.11.1"
 chrono = "0.4.41"
 iced = { version = "0.14.0", features = ["advanced", "canvas", "tokio"] }
-iced-code-editor = "0.3.6"
+iced-code-editor = "0.3.7"
 polars = { version = "0.53.0", features = ["lazy", "parquet", "sql"] }
 rand = "0.10.0"
 rand_distr = "0.6.0"
 sqlparser = "0.61.0"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["full"] }
 tokio-postgres = "0.7.16"
 tokio-rusqlite = { version = "0.7.0", features = ["bundled"] }
 tokio-stream = "0.1.18"

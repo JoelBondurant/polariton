@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use polars::sql::SQLContext;
 
 pub const FIELDS: &[AdapterField] = &[AdapterField {
-	key: "file_path",
+	key: "input_path",
 	value: "",
 	field_type: &AdapterFieldType::Text,
 	is_secure: false,
