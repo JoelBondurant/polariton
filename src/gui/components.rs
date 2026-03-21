@@ -2,15 +2,19 @@ use crate::adapters::{
 	common::{AdapterFieldType, AdapterStage},
 	driver::{fields_for, AdapterSelection, AdapterState},
 };
-use crate::gui::messages::Message;
+use crate::gui::messages::{Message, PlotMessage};
+use crate::gui::plot_state::PlotState;
 use crate::gui::{colors, table::Table};
+use crate::plot::colors::ColorTheme;
+use crate::plot::common::{GridLineStyle, PlotWidget};
+use crate::plot::core::PlotType;
+use iced::widget::{
+	button, canvas, center, checkbox, column, container, mouse_area, opaque, pane_grid, pick_list,
+	row, scrollable, space, stack, text, text_input, tooltip, TextInput, Tooltip,
+};
 use iced::{
 	border, font, mouse,
 	theme::{Palette, Theme},
-	widget::{
-		button, center, column, container, mouse_area, pane_grid, row, space, stack, text,
-		text_input, tooltip, TextInput, Tooltip,
-	},
 	window::Direction,
 	Alignment, Background, Center, Color, Element, Fill, FillPortion, Font, Length,
 };
@@ -19,9 +23,11 @@ use polars::frame::DataFrame;
 
 pub const BUTTON_SIZE_DEFAULT: (u32, u32) = (120, 40);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneType {
 	CodeEditor,
 	DataTable,
+	Dashboard,
 }
 
 pub fn theme() -> Theme {
@@ -53,7 +59,7 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 						weight: font::Weight::Bold,
 						..Default::default()
 					})
-					.color(colors::BRAND_GREEN),
+					.color(colors::WHITE),
 				space::horizontal()
 			]))
 			.on_press(Message::DragWindow),
@@ -69,19 +75,17 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 			)
 			.width(width)
 			.height(height)
-			.style(|_theme: &Theme, status: button::Status| {
-				match status {
-					button::Status::Hovered => button::Style {
-						background: Some(Background::Color(colors::BRAND_PURPLE)),
-						text_color: colors::TEXT_TITLE_BUTTON_HOVER,
-						..button::Style::default()
-					},
-					_ => button::Style {
-						background: Some(Background::Color(Color::TRANSPARENT)),
-						text_color: colors::TEXT_TITLE_BUTTON,
-						..button::Style::default()
-					},
-				}
+			.style(|_theme: &Theme, status: button::Status| match status {
+				button::Status::Hovered => button::Style {
+					background: Some(Background::Color(colors::BRAND_PURPLE)),
+					text_color: colors::TEXT_TITLE_BUTTON_HOVER,
+					..button::Style::default()
+				},
+				_ => button::Style {
+					background: Some(Background::Color(Color::TRANSPARENT)),
+					text_color: colors::TEXT_TITLE_BUTTON,
+					..button::Style::default()
+				},
 			})
 			.on_press(Message::MinimizeWindow),
 			button(
@@ -96,19 +100,17 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 			)
 			.width(width)
 			.height(height)
-			.style(|_theme: &Theme, status: button::Status| {
-				match status {
-					button::Status::Hovered => button::Style {
-						background: Some(Background::Color(colors::BRAND_PURPLE)),
-						text_color: colors::TEXT_TITLE_BUTTON_HOVER,
-						..button::Style::default()
-					},
-					_ => button::Style {
-						background: Some(Background::Color(Color::TRANSPARENT)),
-						text_color: colors::TEXT_TITLE_BUTTON,
-						..button::Style::default()
-					},
-				}
+			.style(|_theme: &Theme, status: button::Status| match status {
+				button::Status::Hovered => button::Style {
+					background: Some(Background::Color(colors::BRAND_PURPLE)),
+					text_color: colors::TEXT_TITLE_BUTTON_HOVER,
+					..button::Style::default()
+				},
+				_ => button::Style {
+					background: Some(Background::Color(Color::TRANSPARENT)),
+					text_color: colors::TEXT_TITLE_BUTTON,
+					..button::Style::default()
+				},
 			})
 			.on_press(Message::MaximizeWindow),
 			button(
@@ -123,19 +125,17 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 			)
 			.width(width)
 			.height(height)
-			.style(|_theme: &Theme, status: button::Status| {
-				match status {
-					button::Status::Hovered => button::Style {
-						background: Some(Background::Color(colors::BRAND_PURPLE)),
-						text_color: colors::TEXT_TITLE_BUTTON_HOVER,
-						..button::Style::default()
-					},
-					_ => button::Style {
-						background: Some(Background::Color(Color::TRANSPARENT)),
-						text_color: colors::TEXT_TITLE_BUTTON,
-						..button::Style::default()
-					},
-				}
+			.style(|_theme: &Theme, status: button::Status| match status {
+				button::Status::Hovered => button::Style {
+					background: Some(Background::Color(colors::BRAND_PURPLE)),
+					text_color: colors::TEXT_TITLE_BUTTON_HOVER,
+					..button::Style::default()
+				},
+				_ => button::Style {
+					background: Some(Background::Color(Color::TRANSPARENT)),
+					text_color: colors::TEXT_TITLE_BUTTON,
+					..button::Style::default()
+				},
 			})
 			.on_press(Message::CloseWindow),
 		]
@@ -147,8 +147,8 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 	.style(|_theme| container::Style {
 		background: Some(colors::BG_SECONDARY.into()),
 		border: border::Border {
-			color: colors::BORDER_SECONDARY,
-			width: 2.0,
+			color: colors::WHITE,
+			width: 0.2,
 			radius: 0.0.into(),
 		},
 		..Default::default()
@@ -158,6 +158,7 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 
 pub fn main_screen<'a>(
 	panes: &'a pane_grid::State<PaneType>,
+	dashboard: &'a Option<pane_grid::State<PlotState>>,
 	code_editor: &'a CodeEditor,
 	data_frame: &'a DataFrame,
 	status: &'a str,
@@ -182,6 +183,12 @@ pub fn main_screen<'a>(
 		.title_bar(pane_grid::TitleBar::new(text(""))),
 		PaneType::DataTable => pane_grid::Content::new(center(Table::new(data_frame, 0)))
 			.title_bar(pane_grid::TitleBar::new(text(""))),
+		PaneType::Dashboard => pane_grid::Content::new(if let Some(dashboard) = dashboard {
+			dashboard_view(dashboard)
+		} else {
+			center(text("").color(colors::TEXT_SECONDARY)).into()
+		})
+		.title_bar(pane_grid::TitleBar::new(text(""))),
 	})
 	.width(Fill)
 	.height(Fill)
@@ -192,6 +199,8 @@ pub fn main_screen<'a>(
 	let button_bar = row![
 		space::horizontal(),
 		styled_button("Connect", Message::Connect, BUTTON_SIZE_DEFAULT),
+		space::horizontal(),
+		pick_list(&PlotType::ALL[..], Some(PlotType::Bar), Message::AddPlot),
 		space::horizontal(),
 		styled_button("Run", Message::Run, BUTTON_SIZE_DEFAULT),
 		space::horizontal(),
@@ -214,6 +223,790 @@ pub fn main_screen<'a>(
 	let main_window = window_decorations(column![main_content, button_bar, status_bar]);
 	let adapter_modal = adapter_view(adapter_state);
 	stack![main_window, adapter_modal].into()
+}
+
+fn dashboard_view<'a>(state: &'a pane_grid::State<PlotState>) -> Element<'a, Message> {
+	pane_grid(state, |id, plot_state, _is_maximized| {
+		let title = plot_state.current_plot_type.to_string();
+
+		pane_grid::Content::new(plot_view(id, plot_state)).title_bar(
+			pane_grid::TitleBar::new(
+				row![
+					container(text(title).size(14))
+						.padding(5)
+						.width(Fill)
+						.style(|_| container::Style {
+							background: Some(Background::Color(colors::BG_SECONDARY)),
+							text_color: Some(colors::TEXT_PRIMARY),
+							..Default::default()
+						}),
+					button(
+						text("✕")
+							.font(Font {
+								weight: font::Weight::Bold,
+								..Default::default()
+							})
+							.size(12)
+							.align_y(Center)
+							.align_x(Center)
+					)
+					.width(30)
+					.height(26)
+					.style(|_theme: &Theme, status: button::Status| match status {
+						button::Status::Hovered => button::Style {
+							background: Some(Background::Color(colors::BRAND_PURPLE)),
+							text_color: colors::TEXT_TITLE_BUTTON_HOVER,
+							..button::Style::default()
+						},
+						_ => button::Style {
+							background: Some(Background::Color(Color::TRANSPARENT)),
+							text_color: colors::TEXT_TITLE_BUTTON,
+							..button::Style::default()
+						},
+					})
+					.on_press(Message::ClosePlot(id))
+				]
+				.align_y(Center),
+			)
+			.padding(2),
+		)
+	})
+	.width(Fill)
+	.height(Fill)
+	.spacing(2)
+	.on_drag(Message::DashboardPaneDragged)
+	.on_resize(10, Message::DashboardPaneResized)
+	.into()
+}
+
+fn plot_view<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Message> {
+	let canvas_widget = canvas(PlotWidget {
+		kernel: state.kernel.as_ref(),
+		title: state.current_plot_type.to_string(),
+		padding: 20.0,
+		settings: state.plot_settings.clone(),
+	})
+	.width(Fill)
+	.height(Fill);
+
+	let plot_content: Element<PlotMessage> = if let Some(info) = &state.hovered_info {
+		Tooltip::new(
+			canvas_widget,
+			container(text(info))
+				.padding(5)
+				.style(|_| container::Style {
+					background: Some(iced::Background::Color(iced::Color {
+						a: 0.85,
+						..state.plot_settings.background_color
+					})),
+					border: iced::Border {
+						color: iced::Color {
+							a: 0.2,
+							..state.plot_settings.decoration_color
+						},
+						width: 1.0,
+						radius: 2.0.into(),
+					},
+					text_color: Some(state.plot_settings.decoration_color),
+					..Default::default()
+				}),
+			tooltip::Position::FollowCursor,
+		)
+		.into()
+	} else {
+		canvas_widget.into()
+	};
+
+	let plot_content = plot_content.map(move |pm| Message::PlotEvent(id, pm));
+
+	let mut main_stack = stack![plot_content];
+
+	if state.settings_open {
+		let settings_panel = plot_settings_panel(id, state);
+		let modal_overlay = container(opaque(
+			row![space::horizontal(), settings_panel].width(Fill),
+		))
+		.width(Fill)
+		.height(Fill)
+		.style(|_| container::Style {
+			background: Some(Background::Color(Color {
+				a: 0.2,
+				..Color::BLACK
+			})),
+			..Default::default()
+		});
+		main_stack = main_stack.push(modal_overlay);
+	}
+
+	container(main_stack.width(Fill).height(Fill))
+		.style(|_| container::Style {
+			background: Some(Background::Color(state.plot_settings.background_color)),
+			text_color: Some(state.plot_settings.decoration_color),
+			..Default::default()
+		})
+		.into()
+}
+
+fn plot_settings_panel<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Message> {
+	let plot_event = move |pm| Message::PlotEvent(id, pm);
+
+	container(
+		column![
+			row![
+				text("Plot Settings").size(24),
+				space::horizontal(),
+				button("Refresh Data").on_press(plot_event(PlotMessage::RefreshData)),
+				space::horizontal(),
+				button("Close").on_press(plot_event(PlotMessage::CloseSettings))
+			]
+			.align_y(Alignment::Center),
+			scrollable(
+				column![
+					section(
+						"General",
+						column![
+							field(
+								"Plot Type",
+								pick_list(
+									&PlotType::ALL[..],
+									Some(state.current_plot_type),
+									move |pt| plot_event(PlotMessage::ChangePlotType(pt))
+								)
+							),
+							field(
+								"Theme",
+								pick_list(
+									&ColorTheme::ALL[..],
+									Some(state.plot_settings.color_theme),
+									move |ct| plot_event(PlotMessage::ChangeColorTheme(ct))
+								)
+							),
+						]
+					),
+					section(
+						"Titles",
+						column![
+							field(
+								"Title",
+								text_input("auto", &state.title_input).on_input(move |s| {
+									if s.is_empty() {
+										plot_event(PlotMessage::SetTitle(None))
+									} else {
+										plot_event(PlotMessage::SetTitle(Some(s)))
+									}
+								})
+							),
+							field(
+								"Title Size",
+								text_input("", &state.title_size_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetTitleSize(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Title Offset",
+								text_input("", &state.title_offset_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetTitleOffset(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Subtitle",
+								text_input("none", &state.subtitle_input).on_input(move |s| {
+									if s.is_empty() {
+										plot_event(PlotMessage::SetSubtitle(None))
+									} else {
+										plot_event(PlotMessage::SetSubtitle(Some(s)))
+									}
+								})
+							),
+							field(
+								"Subtitle Size",
+								text_input("", &state.subtitle_size_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetSubtitleSize(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Subtitle Offset",
+								text_input("", &state.subtitle_offset_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetSubtitleOffset(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+						]
+					),
+					section(
+						"X Axis",
+						column![
+							field(
+								"Label",
+								text_input("auto", &state.x_label_input).on_input(move |s| {
+									if s.is_empty() {
+										plot_event(PlotMessage::SetXLabel(None))
+									} else {
+										plot_event(PlotMessage::SetXLabel(Some(s)))
+									}
+								})
+							),
+							field(
+								"Label Size",
+								text_input("", &state.x_label_size_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetXLabelSize(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Label Padding",
+								text_input("", &state.x_label_padding_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetXLabelPadding(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							horizontal_rule(),
+							field(
+								"Major Ticks",
+								text_input("", &state.x_ticks_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<u32>() {
+										plot_event(PlotMessage::SetXTicks(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Tick Size",
+								text_input("", &state.x_tick_size_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetXTickSize(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							checkbox(state.plot_settings.show_x_minor_ticks)
+								.label("Show Minor Ticks")
+								.on_toggle(move |v| plot_event(PlotMessage::ToggleXMinorTicks(v))),
+							field(
+								"Minor Ticks",
+								text_input("", &state.x_minor_ticks_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<u32>() {
+										plot_event(PlotMessage::SetXMinorTicks(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							horizontal_rule(),
+							checkbox(state.plot_settings.show_x_major_grid)
+								.label("Show Major Grid")
+								.on_toggle(move |v| plot_event(PlotMessage::ToggleXMajorGrid(v))),
+							field(
+								"Grid Width",
+								text_input("", &state.x_major_grid_width_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<f32>() {
+											plot_event(PlotMessage::SetXMajorGridWidth(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
+								)
+							),
+							field(
+								"Grid Style",
+								pick_list(
+									&GridLineStyle::ALL[..],
+									Some(state.plot_settings.x_major_grid_style),
+									move |s| plot_event(PlotMessage::SetXMajorGridStyle(s))
+								)
+							),
+							horizontal_rule(),
+							checkbox(state.plot_settings.show_x_minor_grid)
+								.label("Show Minor Grid")
+								.on_toggle(move |v| plot_event(PlotMessage::ToggleXMinorGrid(v))),
+							field(
+								"Minor Grid Width",
+								text_input("", &state.x_minor_grid_width_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<f32>() {
+											plot_event(PlotMessage::SetXMinorGridWidth(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
+								)
+							),
+							field(
+								"Minor Grid Style",
+								pick_list(
+									&GridLineStyle::ALL[..],
+									Some(state.plot_settings.x_minor_grid_style),
+									move |s| plot_event(PlotMessage::SetXMinorGridStyle(s))
+								)
+							),
+						]
+						.spacing(10)
+					),
+					section(
+						"Y Axis",
+						column![
+							field(
+								"Label",
+								text_input("auto", &state.y_label_input).on_input(move |s| {
+									if s.is_empty() {
+										plot_event(PlotMessage::SetYLabel(None))
+									} else {
+										plot_event(PlotMessage::SetYLabel(Some(s)))
+									}
+								})
+							),
+							field(
+								"Label Size",
+								text_input("", &state.y_label_size_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetYLabelSize(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Label Padding",
+								text_input("", &state.y_label_padding_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetYLabelPadding(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							horizontal_rule(),
+							field(
+								"Major Ticks",
+								text_input("", &state.y_ticks_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<u32>() {
+										plot_event(PlotMessage::SetYTicks(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Tick Size",
+								text_input("", &state.y_tick_size_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetYTickSize(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							checkbox(state.plot_settings.show_y_minor_ticks)
+								.label("Show Minor Ticks")
+								.on_toggle(move |v| plot_event(PlotMessage::ToggleYMinorTicks(v))),
+							field(
+								"Minor Ticks",
+								text_input("", &state.y_minor_ticks_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<u32>() {
+										plot_event(PlotMessage::SetYMinorTicks(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							horizontal_rule(),
+							checkbox(state.plot_settings.show_y_major_grid)
+								.label("Show Major Grid")
+								.on_toggle(move |v| plot_event(PlotMessage::ToggleYMajorGrid(v))),
+							field(
+								"Grid Width",
+								text_input("", &state.y_major_grid_width_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<f32>() {
+											plot_event(PlotMessage::SetYMajorGridWidth(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
+								)
+							),
+							field(
+								"Grid Style",
+								pick_list(
+									&GridLineStyle::ALL[..],
+									Some(state.plot_settings.y_major_grid_style),
+									move |s| plot_event(PlotMessage::SetYMajorGridStyle(s))
+								)
+							),
+							horizontal_rule(),
+							checkbox(state.plot_settings.show_y_minor_grid)
+								.label("Show Minor Grid")
+								.on_toggle(move |v| plot_event(PlotMessage::ToggleYMinorGrid(v))),
+							field(
+								"Minor Grid Width",
+								text_input("", &state.y_minor_grid_width_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<f32>() {
+											plot_event(PlotMessage::SetYMinorGridWidth(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
+								)
+							),
+							field(
+								"Minor Grid Style",
+								pick_list(
+									&GridLineStyle::ALL[..],
+									Some(state.plot_settings.y_minor_grid_style),
+									move |s| plot_event(PlotMessage::SetYMinorGridStyle(s))
+								)
+							),
+						]
+						.spacing(10)
+					),
+					section(
+						"Plot Padding",
+						column![
+							field(
+								"Top",
+								text_input("", &state.plot_padding_top_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetPlotPaddingTop(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Bottom",
+								text_input("", &state.plot_padding_bottom_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<f32>() {
+											plot_event(PlotMessage::SetPlotPaddingBottom(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
+								)
+							),
+							field(
+								"Left",
+								text_input("", &state.plot_padding_left_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetPlotPaddingLeft(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Right",
+								text_input("", &state.plot_padding_right_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<f32>() {
+											plot_event(PlotMessage::SetPlotPaddingRight(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
+								)
+							),
+						]
+					),
+					section(
+						"Colors",
+						column![
+							field(
+								"Background",
+								text_input("", &state.bg_color_input).on_input(move |s| {
+									plot_event(PlotMessage::ChangeBackgroundHex(s))
+								})
+							),
+							field(
+								"Decoration",
+								text_input("", &state.decoration_color_input).on_input(move |s| {
+									plot_event(PlotMessage::ChangeDecorationHex(s))
+								})
+							),
+						]
+					),
+					section(
+						"Legend",
+						column![
+							field(
+								"Max Rows",
+								text_input("", &state.max_legend_rows_input).on_input(move |s| {
+									if let Ok(rows) = s.parse::<u32>() {
+										plot_event(PlotMessage::SetMaxLegendRows(rows))
+									} else if s.is_empty() {
+										plot_event(PlotMessage::SetMaxLegendRows(0))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Legend Size",
+								text_input("", &state.legend_size_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetLegendSize(val))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"X (0-1)",
+								text_input("", &state.legend_x_input).on_input(move |s| {
+									if let Ok(x) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetLegendX(x))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Y (0-1)",
+								text_input("", &state.legend_y_input).on_input(move |s| {
+									if let Ok(y) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetLegendY(y))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+						]
+					),
+					section(
+						"X Axis Labels",
+						column![
+							field(
+								"Rotation",
+								text_input("", &state.x_rotation_input).on_input(move |s| {
+									if let Ok(deg) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetXRotation(deg))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Offset",
+								text_input("", &state.x_offset_input).on_input(move |s| {
+									if let Ok(offset) = s.parse::<f32>() {
+										plot_event(PlotMessage::SetXOffset(offset))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+						]
+					),
+					section(
+						"X Axis Range",
+						column![
+							field(
+								"Min",
+								text_input("auto", &state.x_min_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f64>() {
+										plot_event(PlotMessage::SetXMin(Some(val)))
+									} else if s.is_empty() {
+										plot_event(PlotMessage::SetXMin(None))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Max",
+								text_input("auto", &state.x_max_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f64>() {
+										plot_event(PlotMessage::SetXMax(Some(val)))
+									} else if s.is_empty() {
+										plot_event(PlotMessage::SetXMax(None))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+						]
+					),
+					section(
+						"Y Axis Range",
+						column![
+							field(
+								"Min",
+								text_input("auto", &state.y_min_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f64>() {
+										plot_event(PlotMessage::SetYMin(Some(val)))
+									} else if s.is_empty() {
+										plot_event(PlotMessage::SetYMin(None))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+							field(
+								"Max",
+								text_input("auto", &state.y_max_input).on_input(move |s| {
+									if let Ok(val) = s.parse::<f64>() {
+										plot_event(PlotMessage::SetYMax(Some(val)))
+									} else if s.is_empty() {
+										plot_event(PlotMessage::SetYMax(None))
+									} else {
+										plot_event(PlotMessage::UpdateHover(
+											state.hovered_info.clone(),
+										))
+									}
+								})
+							),
+						]
+					),
+				]
+				.spacing(20)
+			)
+		]
+		.spacing(20)
+		.padding(20),
+	)
+	.width(400)
+	.height(Fill)
+	.style(move |_| container::Style {
+		background: Some(Background::Color(Color {
+			a: 0.95,
+			..state.plot_settings.background_color
+		})),
+		border: border::Border {
+			color: state.plot_settings.decoration_color,
+			width: 1.0,
+			radius: 0.0.into(),
+		},
+		text_color: Some(state.plot_settings.decoration_color),
+		..Default::default()
+	})
+	.into()
+}
+
+fn section<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+	column![
+		text(title).size(18),
+		container(content).padding(10).style(|_| container::Style {
+			border: border::Border {
+				color: Color {
+					a: 0.2,
+					r: 0.5,
+					g: 0.5,
+					b: 0.5
+				},
+				width: 1.0,
+				radius: 4.0.into(),
+			},
+			..Default::default()
+		})
+	]
+	.spacing(8)
+	.into()
+}
+
+fn field<'a>(label: &'a str, widget: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+	row![text(label).width(Length::Fixed(120.0)), widget.into()]
+		.spacing(10)
+		.align_y(Alignment::Center)
+		.into()
+}
+
+fn horizontal_rule<'a>() -> Element<'a, Message> {
+	container(row![].width(Fill).height(1))
+		.style(|_| container::Style {
+			background: Some(Background::Color(Color {
+				a: 0.1,
+				..Color::WHITE
+			})),
+			..Default::default()
+		})
+		.into()
 }
 
 fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<'a, Message> {

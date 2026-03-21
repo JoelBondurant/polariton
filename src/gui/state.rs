@@ -4,7 +4,8 @@ use crate::adapters::{
 };
 use crate::gui::{
 	components::{self, PaneType},
-	messages::Message,
+	messages::{Message, PlotMessage},
+	plot_state::PlotState,
 };
 use iced::{application, widget::pane_grid, window, Element, Size, Task};
 use iced_code_editor::CodeEditor;
@@ -13,6 +14,7 @@ use std::time::Instant;
 
 struct AppState {
 	panes: pane_grid::State<PaneType>,
+	dashboard: Option<pane_grid::State<PlotState>>,
 	code_editor: CodeEditor,
 	data_frame: DataFrame,
 	status: String,
@@ -43,17 +45,19 @@ pub fn run() -> Result {
 fn new() -> AppState {
 	let data_frame = DataFrame::default();
 	let (mut panes, editor_pane) = pane_grid::State::new(PaneType::CodeEditor);
-	let _ = panes.split(
-		pane_grid::Axis::Horizontal,
-		editor_pane,
-		PaneType::DataTable,
-	);
+	let (data_pane, _) = panes
+		.split(pane_grid::Axis::Horizontal, editor_pane, PaneType::DataTable)
+		.unwrap();
+
+	let _ = panes.split(pane_grid::Axis::Vertical, data_pane, PaneType::Dashboard);
+
 	let mut code_editor = CodeEditor::new("", "sql");
 	code_editor.set_theme(iced_code_editor::theme::from_iced_theme(
 		&components::theme(),
 	));
 	AppState {
 		panes,
+		dashboard: None,
 		code_editor,
 		data_frame,
 		status: "".to_string(),
@@ -66,6 +70,7 @@ fn new() -> AppState {
 fn view(app_state: &AppState) -> Element<'_, Message> {
 	components::main_screen(
 		&app_state.panes,
+		&app_state.dashboard,
 		&app_state.code_editor,
 		&app_state.data_frame,
 		&app_state.status,
@@ -105,6 +110,17 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			app_state.panes.drop(pane, target);
 		}
 		Message::PaneDragged(pane_grid::DragEvent::Canceled { .. }) => {}
+		Message::DashboardPaneResized(pane_grid::ResizeEvent { split, ratio }) => {
+			if let Some(dashboard) = &mut app_state.dashboard {
+				dashboard.resize(split, ratio);
+			}
+		}
+		Message::DashboardPaneDragged(pane_grid::DragEvent::Dropped { pane, target }) => {
+			if let Some(dashboard) = &mut app_state.dashboard {
+				dashboard.drop(pane, target);
+			}
+		}
+		Message::DashboardPaneDragged(pane_grid::DragEvent::Canceled { .. }) => {}
 		Message::Connect => match app_state.adapter_state.stage {
 			AdapterStage::None => {
 				app_state.adapter_state.stage = AdapterStage::Unselected;
@@ -180,6 +196,36 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				}
 				ExecutionResult::None => {
 					app_state.status = format!("Noop finished: {time_elapsed}s");
+				}
+			}
+		}
+		Message::AddPlot(plot_type) => {
+			let new_plot = PlotState::new(plot_type, &app_state.data_frame, 1200, 1200);
+			if let Some(dashboard) = &mut app_state.dashboard {
+				let last_pane = *dashboard.panes.keys().next().unwrap();
+				let _ = dashboard.split(pane_grid::Axis::Horizontal, last_pane, new_plot);
+			} else {
+				let (dashboard, _) = pane_grid::State::new(new_plot);
+				app_state.dashboard = Some(dashboard);
+			}
+		}
+		Message::ClosePlot(pane) => {
+			if let Some(dashboard) = &mut app_state.dashboard {
+				let _ = dashboard.close(pane);
+				if dashboard.panes.is_empty() {
+					app_state.dashboard = None;
+				}
+			}
+		}
+		Message::PlotEvent(pane, plot_message) => {
+			if let Some(dashboard) = &mut app_state.dashboard {
+				if let Some(plot_state) = dashboard.get_mut(pane) {
+					match plot_message {
+						PlotMessage::RefreshData => {
+							plot_state.refresh(&app_state.data_frame);
+						}
+						_ => plot_state.update(plot_message),
+					}
 				}
 			}
 		}

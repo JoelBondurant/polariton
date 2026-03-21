@@ -10,7 +10,6 @@ pub const BG_BUTTON_HOVER: Color = rgb(16, 16, 32);
 pub const BG_MODAL: Color = rgba(2, 2, 2, 0.96);
 
 pub const BORDER_PRIMARY: Color = rgb(60, 8, 100);
-pub const BORDER_SECONDARY: Color = rgb(32, 80, 32);
 pub const BORDER_DIM: Color = rgb(24, 2, 32);
 pub const BORDER_ACCENT: Color = rgb(110, 10, 240);
 pub const BORDER_HOVER: Color = rgb(80, 8, 140);
@@ -20,7 +19,7 @@ pub const TEXT_SECONDARY: Color = rgb(200, 180, 200);
 pub const TEXT_PLACEHOLDER: Color = rgb(80, 70, 80);
 pub const TEXT_PLACEHOLDER_HOVER: Color = rgb(100, 90, 100);
 pub const TEXT_TITLE_BUTTON: Color = rgb(120, 120, 120);
-pub const TEXT_TITLE_BUTTON_HOVER: Color = rgb(100, 250, 100);
+pub const TEXT_TITLE_BUTTON_HOVER: Color = Color::WHITE;
 pub const TEXT_STATUS: Color = rgb(170, 130, 230);
 
 pub const BRAND_GREEN: Color = rgb(80, 180, 80);
@@ -37,6 +36,8 @@ pub const TABLE_ROW_ODD: Color = rgb(40, 20, 70);
 pub const TABLE_BORDER: Color = rgba(250, 250, 250, 0.1);
 pub const TABLE_TEXT_HEADER: Color = rgb(250, 250, 250);
 pub const SCROLLBAR_THUMB: Color = rgba(140, 0, 250, 0.5);
+
+pub const WHITE: Color = Color::WHITE;
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
 	Color::from_rgb8(r, g, b)
