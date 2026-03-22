@@ -1045,6 +1045,11 @@ fn horizontal_rule<'a>() -> Element<'a, Message> {
 fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
 	let resize_thin = 6;
 	let resize_thick = 60;
+	let resize_area_northeast_top =
+		styled_resize_area(resize_thick, resize_thin / 2, Direction::NorthEast);
+	let resize_area_north = styled_resize_area(Fill, resize_thin / 2, Direction::North);
+	let resize_area_northwest_top =
+		styled_resize_area(resize_thick, resize_thin / 2, Direction::NorthWest);
 	let resize_area_northwest_side =
 		styled_resize_area(resize_thin, resize_thick, Direction::NorthWest);
 	let resize_area_west = styled_resize_area(resize_thin, Fill, Direction::West);
@@ -1061,6 +1066,11 @@ fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<
 	let resize_area_southeast_side =
 		styled_resize_area(resize_thin, resize_thick, Direction::SouthEast);
 	column![
+		row![
+			resize_area_northwest_top,
+			resize_area_north,
+			resize_area_northeast_top,
+		],
 		row![title_bar()],
 		row![
 			column![
