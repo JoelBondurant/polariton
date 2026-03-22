@@ -21,11 +21,6 @@ struct AppState {
 	adapter_state: AdapterState,
 	code_started: Instant,
 	is_maximized: bool,
-	main_horizontal_split: Option<pane_grid::Split>,
-	main_vertical_split: Option<pane_grid::Split>,
-	main_horizontal_ratio: f32,
-	main_vertical_ratio: f32,
-	previous_ratios: std::collections::HashMap<pane_grid::Split, f32>,
 }
 
 pub type Result = iced::Result;
@@ -50,19 +45,20 @@ pub fn run() -> Result {
 fn new() -> AppState {
 	let data_frame = DataFrame::default();
 	let (mut panes, editor_pane) = pane_grid::State::new(PaneType::CodeEditor);
-	let (data_pane, split_horiz) = panes
-		.split(pane_grid::Axis::Horizontal, editor_pane, PaneType::DataTable)
+	let (_data_pane, _) = panes
+		.split(
+			pane_grid::Axis::Horizontal,
+			editor_pane,
+			PaneType::DataTable,
+		)
 		.unwrap();
-
-	let (_, split_vert) = panes
-		.split(pane_grid::Axis::Vertical, data_pane, PaneType::Dashboard)
+	let _ = panes
+		.split(pane_grid::Axis::Vertical, editor_pane, PaneType::Dashboard)
 		.unwrap();
-
 	let mut code_editor = CodeEditor::new("", "sql");
 	code_editor.set_theme(iced_code_editor::theme::from_iced_theme(
 		&components::theme(),
 	));
-
 	AppState {
 		panes,
 		dashboard: None,
@@ -72,11 +68,6 @@ fn new() -> AppState {
 		adapter_state: AdapterState::default(),
 		code_started: Instant::now(),
 		is_maximized: false,
-		main_horizontal_split: Some(split_horiz),
-		main_vertical_split: Some(split_vert),
-		main_horizontal_ratio: 0.5,
-		main_vertical_ratio: 0.5,
-		previous_ratios: std::collections::HashMap::new(),
 	}
 }
 
@@ -118,11 +109,6 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
 			app_state.panes.resize(split, ratio);
-			if Some(split) == app_state.main_horizontal_split {
-				app_state.main_horizontal_ratio = ratio;
-			} else if Some(split) == app_state.main_vertical_split {
-				app_state.main_vertical_ratio = ratio;
-			}
 		}
 		Message::PaneDragged(drag_event) => {
 			if let pane_grid::DragEvent::Dropped { pane, target } = drag_event {
@@ -135,56 +121,9 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			}
 		}
 		Message::DashboardPaneDragged(drag_event) => {
-			if let Some(dashboard) = &mut app_state.dashboard {
-				if let pane_grid::DragEvent::Dropped { pane, target } = drag_event {
-					dashboard.drop(pane, target);
-				}
-			}
-		}
-		Message::TogglePane(pane_type) => {
-			match pane_type {
-				PaneType::CodeEditor => {
-					if let Some(split) = app_state.main_horizontal_split {
-						let current_ratio = app_state.main_horizontal_ratio;
-						if current_ratio > 0.01 {
-							app_state.previous_ratios.insert(split, current_ratio);
-							app_state.panes.resize(split, 0.0);
-							app_state.main_horizontal_ratio = 0.0;
-						} else {
-							let prev = *app_state.previous_ratios.get(&split).unwrap_or(&0.5);
-							app_state.panes.resize(split, prev);
-							app_state.main_horizontal_ratio = prev;
-						}
-					}
-				}
-				PaneType::DataTable => {
-					if let Some(split) = app_state.main_vertical_split {
-						let current_ratio = app_state.main_vertical_ratio;
-						if current_ratio < 0.99 {
-							app_state.previous_ratios.insert(split, current_ratio);
-							app_state.panes.resize(split, 1.0);
-							app_state.main_vertical_ratio = 1.0;
-						} else {
-							let prev = *app_state.previous_ratios.get(&split).unwrap_or(&0.5);
-							app_state.panes.resize(split, prev);
-							app_state.main_vertical_ratio = prev;
-						}
-					}
-				}
-				PaneType::Dashboard => {
-					if let Some(split) = app_state.main_vertical_split {
-						let current_ratio = app_state.main_vertical_ratio;
-						if current_ratio > 0.01 {
-							app_state.previous_ratios.insert(split, current_ratio);
-							app_state.panes.resize(split, 0.0);
-							app_state.main_vertical_ratio = 0.0;
-						} else {
-							let prev = *app_state.previous_ratios.get(&split).unwrap_or(&0.5);
-							app_state.panes.resize(split, prev);
-							app_state.main_vertical_ratio = prev;
-						}
-					}
-				}
+			if let Some(dashboard) = &mut app_state.dashboard
+				&& let pane_grid::DragEvent::Dropped { pane, target } = drag_event {
+				dashboard.drop(pane, target);
 			}
 		}
 		Message::Connect => match app_state.adapter_state.stage {
@@ -260,7 +199,8 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 					let rows = df.height();
 					let cols = df.width();
 					app_state.data_frame = df;
-					app_state.status = format!("Code finished: {time_elapsed}s | Size: {rows} x {cols}");
+					app_state.status =
+						format!("Code finished: {time_elapsed}s | Size: {rows} x {cols}");
 				}
 				ExecutionResult::None => {
 					app_state.status = format!("Noop finished: {time_elapsed}s");
@@ -287,14 +227,13 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			}
 		}
 		Message::PlotEvent(pane, plot_message) => {
-			if let Some(dashboard) = &mut app_state.dashboard {
-				if let Some(plot_state) = dashboard.get_mut(pane) {
-					match plot_message {
-						PlotMessage::RefreshData => {
-							plot_state.refresh(&app_state.data_frame);
-						}
-						_ => plot_state.update(plot_message),
+			if let Some(dashboard) = &mut app_state.dashboard
+				&& let Some(plot_state) = dashboard.get_mut(pane) {
+				match plot_message {
+					PlotMessage::RefreshData => {
+						plot_state.refresh(&app_state.data_frame);
 					}
+					_ => plot_state.update(plot_message),
 				}
 			}
 		}

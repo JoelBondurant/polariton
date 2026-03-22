@@ -156,44 +156,15 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 	.into()
 }
 
-fn pane_title_bar<'a>(pane_type: PaneType) -> pane_grid::TitleBar<'a, Message> {
+fn pane_title_bar<'a>(_pane_type: PaneType) -> pane_grid::TitleBar<'a, Message> {
 	pane_grid::TitleBar::new(
-		row![
-			container(space::horizontal().width(Fill))
-				.width(Fill)
-				.padding(5)
-				.style(|_| container::Style {
-					background: Some(Background::Color(colors::BG_SECONDARY)),
-					..Default::default()
-				}),
-			button(
-				text("▵▿")
-					.font(Font {
-						weight: font::Weight::Bold,
-						..Default::default()
-					})
-					.size(14)
-					.align_y(Center)
-					.align_x(Center)
-			)
-			.on_press(Message::TogglePane(pane_type))
-			.padding(2)
-			.width(30)
-			.height(26)
-			.style(|_, status| match status {
-				button::Status::Hovered => button::Style {
-					background: Some(Background::Color(colors::BRAND_PURPLE)),
-					text_color: colors::TEXT_TITLE_BUTTON_HOVER,
-					..button::Style::default()
-				},
-				_ => button::Style {
-					background: Some(Background::Color(Color::TRANSPARENT)),
-					text_color: colors::TEXT_TITLE_BUTTON,
-					..button::Style::default()
-				},
-			})
-		]
-		.align_y(Center),
+		container(space::horizontal().width(Fill))
+			.width(Fill)
+			.padding(5)
+			.style(|_| container::Style {
+				background: Some(Background::Color(colors::BG_SECONDARY)),
+				..Default::default()
+			}),
 	)
 	.padding(2)
 }
@@ -208,19 +179,16 @@ pub fn main_screen<'a>(
 ) -> Element<'a, Message> {
 	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
 		PaneType::CodeEditor => pane_grid::Content::new(center(
-			container(styled_tooltip(
-				code_editor.view().map(Message::CodeEditEvent),
-				"Code  ",
-			))
-			.padding(1)
-			.style(|_| container::Style {
-				border: border::Border {
-					color: colors::BORDER_PRIMARY,
-					width: 1.0,
-					radius: 5.0.into(),
-				},
-				..Default::default()
-			}),
+			container(code_editor.view().map(Message::CodeEditEvent))
+				.padding(1)
+				.style(|_| container::Style {
+					border: border::Border {
+						color: colors::BORDER_PRIMARY,
+						width: 1.0,
+						radius: 5.0.into(),
+					},
+					..Default::default()
+				}),
 		))
 		.title_bar(pane_title_bar(PaneType::CodeEditor)),
 		PaneType::DataTable => pane_grid::Content::new(center(Table::new(data_frame, 0)))
@@ -1167,20 +1135,6 @@ fn styled_resize_area<'a, WT: Into<Length>, HT: Into<Length>>(
 	})
 	.on_press(Message::ResizeWindow(direction))
 	.into()
-}
-
-fn styled_tooltip<'a, Message>(
-	underlay: impl Into<Element<'a, Message>>,
-	label: &'a str,
-) -> Tooltip<'a, Message>
-where
-	Message: 'a,
-{
-	tooltip(
-		underlay,
-		container(text(label.to_string()).color(colors::BRAND_GREEN).size(18)).padding(10),
-		tooltip::Position::Right,
-	)
 }
 
 pub fn styled_button<'a, Message: Clone + 'a>(

@@ -21,8 +21,6 @@ pub const TEXT_PLACEHOLDER_HOVER: Color = rgb(100, 90, 100);
 pub const TEXT_TITLE_BUTTON: Color = rgb(120, 120, 120);
 pub const TEXT_TITLE_BUTTON_HOVER: Color = Color::WHITE;
 pub const TEXT_STATUS: Color = rgb(170, 130, 230);
-
-pub const BRAND_GREEN: Color = rgb(80, 180, 80);
 pub const BRAND_PURPLE: Color = rgb(150, 4, 250);
 
 pub const DANGER: Color = rgb(200, 40, 40);
