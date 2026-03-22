@@ -206,17 +206,6 @@ pub fn main_screen<'a>(
 	.on_drag(Message::PaneDragged)
 	.on_resize(10, Message::PaneResized);
 	let main_content = container(main_pane).padding(4).width(Fill);
-	let button_bar = row![
-		space::horizontal(),
-		styled_button("Connect", Message::Connect, BUTTON_SIZE_DEFAULT),
-		space::horizontal(),
-		pick_list(&PlotType::ALL[..], Some(PlotType::Bar), Message::AddPlot),
-		space::horizontal(),
-		styled_button("Run", Message::Run, BUTTON_SIZE_DEFAULT),
-		space::horizontal(),
-	]
-	.padding(16)
-	.align_y(Center);
 	let status_bar = container(center(
 		row![
 			text("| ").color(colors::BRAND_PURPLE),
@@ -229,9 +218,47 @@ pub fn main_screen<'a>(
 	.height(30)
 	.padding(1)
 	.width(Fill);
-	let main_window = window_decorations(column![main_content, button_bar, status_bar]);
+	let main_window = window_decorations(column![main_content, status_bar]);
 	let adapter_modal = adapter_view(adapter_state);
 	stack![main_window, adapter_modal].into()
+}
+
+pub fn menu_bar<'a>() -> Element<'a, Message> {
+	row![
+		pick_list(&["New"][..], None::<&str>, |_| Message::Connect)
+			.placeholder("Connect")
+			.style(|_theme, _status| pick_list::Style {
+				background: Background::Color(colors::BG_SECONDARY),
+				border: border::Border::default(),
+				text_color: colors::TEXT_PRIMARY,
+				placeholder_color: colors::TEXT_PRIMARY,
+				handle_color: Color::TRANSPARENT,
+			})
+			.padding(8),
+		pick_list(&["Run"][..], None::<&str>, |_| Message::Run)
+			.placeholder("Code")
+			.style(|_theme, _status| pick_list::Style {
+				background: Background::Color(colors::BG_SECONDARY),
+				border: border::Border::default(),
+				text_color: colors::TEXT_PRIMARY,
+				placeholder_color: colors::TEXT_PRIMARY,
+				handle_color: Color::TRANSPARENT,
+			})
+			.padding(8),
+		pick_list(&PlotType::ALL[..], None::<PlotType>, Message::AddPlot)
+			.placeholder("Plot")
+			.style(|_theme, _status| pick_list::Style {
+				background: Background::Color(colors::BG_SECONDARY),
+				border: border::Border::default(),
+				text_color: colors::TEXT_PRIMARY,
+				placeholder_color: colors::TEXT_PRIMARY,
+				handle_color: Color::TRANSPARENT,
+			})
+			.padding(8),
+	]
+	.spacing(10)
+	.padding(2)
+	.into()
 }
 
 fn dashboard_view<'a>(state: &'a pane_grid::State<PlotState>) -> Element<'a, Message> {
@@ -1040,6 +1067,7 @@ fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<
 			resize_area_northeast_top,
 		],
 		row![title_bar()],
+		row![menu_bar()],
 		row![
 			column![
 				resize_area_northwest_side,
