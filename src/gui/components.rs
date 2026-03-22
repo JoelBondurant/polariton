@@ -156,6 +156,48 @@ pub fn title_bar<'a>() -> Element<'a, Message> {
 	.into()
 }
 
+fn pane_title_bar<'a>(pane_type: PaneType) -> pane_grid::TitleBar<'a, Message> {
+	pane_grid::TitleBar::new(
+		row![
+			container(space::horizontal().width(Fill))
+				.width(Fill)
+				.padding(5)
+				.style(|_| container::Style {
+					background: Some(Background::Color(colors::BG_SECONDARY)),
+					..Default::default()
+				}),
+			button(
+				text("▵▿")
+					.font(Font {
+						weight: font::Weight::Bold,
+						..Default::default()
+					})
+					.size(14)
+					.align_y(Center)
+					.align_x(Center)
+			)
+			.on_press(Message::TogglePane(pane_type))
+			.padding(2)
+			.width(30)
+			.height(26)
+			.style(|_, status| match status {
+				button::Status::Hovered => button::Style {
+					background: Some(Background::Color(colors::BRAND_PURPLE)),
+					text_color: colors::TEXT_TITLE_BUTTON_HOVER,
+					..button::Style::default()
+				},
+				_ => button::Style {
+					background: Some(Background::Color(Color::TRANSPARENT)),
+					text_color: colors::TEXT_TITLE_BUTTON,
+					..button::Style::default()
+				},
+			})
+		]
+		.align_y(Center),
+	)
+	.padding(2)
+}
+
 pub fn main_screen<'a>(
 	panes: &'a pane_grid::State<PaneType>,
 	dashboard: &'a Option<pane_grid::State<PlotState>>,
@@ -180,15 +222,15 @@ pub fn main_screen<'a>(
 				..Default::default()
 			}),
 		))
-		.title_bar(pane_grid::TitleBar::new(text(""))),
+		.title_bar(pane_title_bar(PaneType::CodeEditor)),
 		PaneType::DataTable => pane_grid::Content::new(center(Table::new(data_frame, 0)))
-			.title_bar(pane_grid::TitleBar::new(text(""))),
+			.title_bar(pane_title_bar(PaneType::DataTable)),
 		PaneType::Dashboard => pane_grid::Content::new(if let Some(dashboard) = dashboard {
 			dashboard_view(dashboard)
 		} else {
 			center(text("").color(colors::TEXT_SECONDARY)).into()
 		})
-		.title_bar(pane_grid::TitleBar::new(text(""))),
+		.title_bar(pane_title_bar(PaneType::Dashboard)),
 	})
 	.width(Fill)
 	.height(Fill)
@@ -209,17 +251,16 @@ pub fn main_screen<'a>(
 	.align_y(Center);
 	let status_bar = container(center(
 		row![
-			text("> ").color(colors::BRAND_PURPLE),
+			text("| ").color(colors::BRAND_PURPLE),
 			text(status).color(colors::TEXT_STATUS),
 			space::horizontal(),
-			text(" <").color(colors::BRAND_PURPLE)
+			text(" |").color(colors::BRAND_PURPLE)
 		]
 		.spacing(1),
 	))
 	.height(30)
 	.padding(1)
 	.width(Fill);
-
 	let main_window = window_decorations(column![main_content, button_bar, status_bar]);
 	let adapter_modal = adapter_view(adapter_state);
 	stack![main_window, adapter_modal].into()
@@ -227,12 +268,10 @@ pub fn main_screen<'a>(
 
 fn dashboard_view<'a>(state: &'a pane_grid::State<PlotState>) -> Element<'a, Message> {
 	pane_grid(state, |id, plot_state, _is_maximized| {
-		let title = plot_state.current_plot_type.to_string();
-
 		pane_grid::Content::new(plot_view(id, plot_state)).title_bar(
 			pane_grid::TitleBar::new(
 				row![
-					container(text(title).size(14))
+					container(space::horizontal().width(Fill))
 						.padding(5)
 						.width(Fill)
 						.style(|_| container::Style {
@@ -288,7 +327,6 @@ fn plot_view<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Messa
 	})
 	.width(Fill)
 	.height(Fill);
-
 	let plot_content: Element<PlotMessage> = if let Some(info) = &state.hovered_info {
 		Tooltip::new(
 			canvas_widget,
@@ -316,11 +354,8 @@ fn plot_view<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Messa
 	} else {
 		canvas_widget.into()
 	};
-
 	let plot_content = plot_content.map(move |pm| Message::PlotEvent(id, pm));
-
 	let mut main_stack = stack![plot_content];
-
 	if state.settings_open {
 		let settings_panel = plot_settings_panel(id, state);
 		let modal_overlay = container(opaque(
@@ -337,7 +372,6 @@ fn plot_view<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Messa
 		});
 		main_stack = main_stack.push(modal_overlay);
 	}
-
 	container(main_stack.width(Fill).height(Fill))
 		.style(|_| container::Style {
 			background: Some(Background::Color(state.plot_settings.background_color)),
@@ -349,7 +383,6 @@ fn plot_view<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Messa
 
 fn plot_settings_panel<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Message> {
 	let plot_event = move |pm| Message::PlotEvent(id, pm);
-
 	container(
 		column![
 			row![

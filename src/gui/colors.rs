@@ -26,7 +26,7 @@ pub const BRAND_GREEN: Color = rgb(80, 180, 80);
 pub const BRAND_PURPLE: Color = rgb(150, 4, 250);
 
 pub const DANGER: Color = rgb(200, 40, 40);
-pub const PRIMARY: Color = rgb(100, 100, 255);
+pub const PRIMARY: Color = rgb(110, 10, 240);
 pub const SELECTION: Color = rgb(110, 10, 240);
 pub const SUCCESS: Color = rgb(40, 200, 40);
 pub const WARNING: Color = rgb(200, 80, 80);

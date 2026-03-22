@@ -2,6 +2,7 @@ use crate::adapters::{
 	common::{DatabaseAdapter, ExecutionResult},
 	driver::AdapterSelection,
 };
+use crate::gui::components::PaneType;
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::GridLineStyle;
 use crate::plot::core::PlotType;
@@ -27,6 +28,8 @@ pub enum Message {
 	PaneResized(pane_grid::ResizeEvent),
 	DashboardPaneDragged(pane_grid::DragEvent),
 	DashboardPaneResized(pane_grid::ResizeEvent),
+	TogglePane(PaneType),
+	#[allow(dead_code)]
 	ResizeWindow(window::Direction),
 	Run,
 	RunResult(ExecutionResult),
