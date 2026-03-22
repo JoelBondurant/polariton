@@ -975,6 +975,44 @@ fn plot_settings_panel<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element
 				]
 				.spacing(20)
 			)
+			.direction(scrollable::Direction::Vertical(
+				scrollable::Scrollbar::new()
+					.width(4)
+					.margin(2)
+					.scroller_width(4)
+			))
+			.style(|_theme, _status| scrollable::Style {
+				container: container::Style::default(),
+				vertical_rail: scrollable::Rail {
+					background: Some(Background::Color(Color::TRANSPARENT)),
+					border: border::Border::default(),
+					scroller: scrollable::Scroller {
+						background: Background::Color(colors::SCROLLBAR_THUMB),
+						border: border::Border {
+							radius: 2.0.into(),
+							..Default::default()
+						},
+					},
+				},
+				horizontal_rail: scrollable::Rail {
+					background: Some(Background::Color(Color::TRANSPARENT)),
+					border: border::Border::default(),
+					scroller: scrollable::Scroller {
+						background: Background::Color(colors::SCROLLBAR_THUMB),
+						border: border::Border {
+							radius: 2.0.into(),
+							..Default::default()
+						},
+					},
+				},
+				gap: None,
+				auto_scroll: scrollable::AutoScroll {
+					background: Background::Color(Color::TRANSPARENT),
+					border: border::Border::default(),
+					shadow: iced::Shadow::default(),
+					icon: Color::TRANSPARENT,
+				},
+			})
 		]
 		.spacing(20)
 		.padding(20),
