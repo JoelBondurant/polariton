@@ -261,7 +261,7 @@ pub fn menu_bar<'a>() -> Element<'a, Message> {
 		.collect();
 	let new_menu = Menu::new(new_items).width(200.0).offset(0.0).spacing(2.0);
 	let export_items: Vec<Item<'a, Message, Theme, iced::Renderer>> =
-		[ExportFormat::SVG, ExportFormat::PNG]
+		[ExportFormat::SVG, ExportFormat::PNG, ExportFormat::AVIF]
 			.iter()
 			.map(|&fmt| {
 				Item::new(
@@ -287,13 +287,13 @@ pub fn menu_bar<'a>() -> Element<'a, Message> {
 		(
 			button(text("Connect")).padding([4, 8]).style(bar_btn_style),
 			Menu::new(menu_items!(
-				(button(text("New Connection").width(Fill))
+				(button(text("New").width(Fill))
 					.width(Fill)
 					.padding([4, 8])
 					.style(item_btn_style)
 					.on_press(Message::Connect))
 			))
-			.width(160.0)
+			.width(100.0)
 			.offset(15.0)
 			.spacing(2.0)
 		),

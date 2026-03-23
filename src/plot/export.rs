@@ -248,6 +248,96 @@ impl PngBackend {
 	}
 }
 
+pub struct AvifBackend {
+	svg_backend: SvgBackend,
+}
+
+impl AvifBackend {
+	pub fn new(width: u32, height: u32) -> Self {
+		Self {
+			svg_backend: SvgBackend::new(width as f32, height as f32),
+		}
+	}
+
+	pub fn save(self, path: &StdPath) {
+		let svg_str = self.svg_backend.finish();
+		let mut fontdb = resvg::usvg::fontdb::Database::new();
+		fontdb.load_system_fonts();
+		let options = resvg::usvg::Options {
+			fontdb: Arc::new(fontdb),
+			..resvg::usvg::Options::default()
+		};
+		let rtree = resvg::usvg::Tree::from_str(&svg_str, &options).unwrap();
+		let w = rtree.size().width() as u32;
+		let h = rtree.size().height() as u32;
+		let mut pixmap = tiny_skia::Pixmap::new(w, h).unwrap();
+		resvg::render(&rtree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+		let pixels: Vec<ravif::RGBA8> = pixmap
+			.pixels()
+			.iter()
+			.map(|p| {
+				let a = p.alpha();
+				if a == 0 {
+					ravif::RGBA8 { r: 0, g: 0, b: 0, a: 0 }
+				} else if a == 255 {
+					ravif::RGBA8 { r: p.red(), g: p.green(), b: p.blue(), a: 255 }
+				} else {
+					let factor = 255.0 / a as f32;
+					ravif::RGBA8 {
+						r: (p.red() as f32 * factor).round() as u8,
+						g: (p.green() as f32 * factor).round() as u8,
+						b: (p.blue() as f32 * factor).round() as u8,
+						a,
+					}
+				}
+			})
+			.collect();
+		let img = ravif::Img::new(pixels.as_slice(), w as usize, h as usize);
+		let encoded = ravif::Encoder::new()
+			.with_quality(90.0)
+			.with_speed(4)
+			.encode_rgba(img)
+			.unwrap();
+		std::fs::write(path, &encoded.avif_file).unwrap();
+	}
+}
+
+impl PlotBackend for AvifBackend {
+	fn stroke_path(&mut self, f: &dyn Fn(&mut dyn PathBuilder), stroke: Stroke) {
+		self.svg_backend.stroke_path(f, stroke);
+	}
+
+	fn fill_path(&mut self, f: &dyn Fn(&mut dyn PathBuilder), color: Color) {
+		self.svg_backend.fill_path(f, color);
+	}
+
+	fn fill_rectangle(&mut self, top_left: Point, size: iced::Size, color: Color) {
+		self.svg_backend.fill_rectangle(top_left, size, color);
+	}
+
+	fn fill_text(&mut self, text: Text) {
+		self.svg_backend.fill_text(text);
+	}
+
+	fn translate(&mut self, translation: iced::Vector) {
+		self.svg_backend.translate(translation);
+	}
+
+	fn rotate(&mut self, angle: f32) {
+		self.svg_backend.rotate(angle);
+	}
+
+	fn with_save(&mut self, f: &mut dyn FnMut(&mut dyn PlotBackend)) {
+		let prev = self.svg_backend.current_transform;
+		f(self);
+		self.svg_backend.current_transform = prev;
+	}
+
+	fn with_clip(&mut self, bounds: Rectangle, f: &mut dyn FnMut(&mut dyn PlotBackend)) {
+		self.svg_backend.with_clip(bounds, f);
+	}
+}
+
 impl PlotBackend for PngBackend {
 	fn stroke_path(&mut self, f: &dyn Fn(&mut dyn PathBuilder), stroke: Stroke) {
 		self.svg_backend.stroke_path(f, stroke);

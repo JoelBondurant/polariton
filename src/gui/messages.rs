@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 pub enum ExportFormat {
 	SVG,
 	PNG,
+	AVIF,
 }
 
 impl std::fmt::Display for ExportFormat {
@@ -23,6 +24,7 @@ impl std::fmt::Display for ExportFormat {
 		match self {
 			ExportFormat::SVG => write!(f, "SVG"),
 			ExportFormat::PNG => write!(f, "PNG"),
+			ExportFormat::AVIF => write!(f, "AVIF"),
 		}
 	}
 }
@@ -53,6 +55,7 @@ pub enum Message {
 	ClosePlot(pane_grid::Pane),
 	Export(ExportFormat),
 	ExportWithWindowSize(ExportFormat, Option<iced::Size>),
+	ExportDone(usize, ExportFormat),
 }
 
 #[allow(dead_code)]

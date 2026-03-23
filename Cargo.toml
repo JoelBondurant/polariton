@@ -25,6 +25,7 @@ tokio-stream = "0.1.18"
 svg_fmt = "0.4.5"
 tiny-skia = "0.12.0"
 png = "0.18.1"
+ravif = { version = "0.11", default-features = false, features = ["threading"] }
 kurbo = "0.13.0"
 resvg = "0.47.0"
 fontdb = "0.23.0"

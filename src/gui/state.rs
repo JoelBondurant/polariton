@@ -7,7 +7,7 @@ use crate::gui::{
 	messages::{ExportFormat, Message, PlotMessage},
 	plot_state::PlotState,
 };
-use crate::plot::export::{PngBackend, SvgBackend};
+use crate::plot::export::{AvifBackend, PngBackend, SvgBackend};
 use iced::{application, widget::pane_grid, window, Element, Size, Task};
 use iced_code_editor::CodeEditor;
 use polars::frame::DataFrame;
@@ -260,22 +260,18 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 					.find(|(pane, _)| app_state.panes.panes.get(pane) == Some(&PaneType::Dashboard))
 					.map(|(_, rect)| rect)
 					.unwrap_or(main_grid_bounds);
+				let mut export_jobs: Vec<Box<dyn FnOnce() + Send + 'static>> = Vec::new();
 				for (id, rect) in get_pane_rects(dashboard.layout(), dashboard_pane_bounds, 2.0) {
 					if let Some(plot_state) = dashboard.panes.get(&id) {
 						let width = rect.width;
-						let height = rect.height - 30.0; // Account for plot title bar
+						let height = rect.height - 30.0;
 						let bounds = iced::Rectangle {
 							x: 0.0,
 							y: 0.0,
 							width,
 							height,
 						};
-						let padding = 20.0;
 						let settings = plot_state.plot_settings.clone();
-						let _padding_top = padding + settings.plot_padding_top;
-						let _padding_bottom = padding + settings.plot_padding_bottom;
-						let _padding_left = padding + settings.plot_padding_left;
-						let _padding_right = padding + settings.plot_padding_right;
 						let widget = crate::plot::common::PlotWidget {
 							kernel: plot_state.kernel.as_ref(),
 							title: plot_state.current_plot_type.to_string(),
@@ -288,19 +284,47 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 								widget.render(&mut backend, bounds);
 								let svg_content = backend.finish();
 								let filename = format!("plot_{:?}.svg", id);
-								let _ = std::fs::write(filename, svg_content);
+								export_jobs.push(Box::new(move || {
+									let _ = std::fs::write(filename, svg_content);
+								}));
 							}
 							ExportFormat::PNG => {
 								let mut backend = PngBackend::new(width as u32, height as u32);
 								widget.render(&mut backend, bounds);
 								let filename = format!("plot_{:?}.png", id);
-								backend.save(std::path::Path::new(&filename));
+								export_jobs.push(Box::new(move || {
+									backend.save(std::path::Path::new(&filename));
+								}));
+							}
+							ExportFormat::AVIF => {
+								let mut backend = AvifBackend::new(width as u32, height as u32);
+								widget.render(&mut backend, bounds);
+								let filename = format!("plot_{:?}.avif", id);
+								export_jobs.push(Box::new(move || {
+									backend.save(std::path::Path::new(&filename));
+								}));
 							}
 						}
 					}
 				}
-				app_state.status = format!("Exported {} plots as {:?}", dashboard.panes.len(), format);
+				let count = export_jobs.len();
+				app_state.status = format!("Exporting {count} plots as {format}...");
+				return Task::perform(
+					async move {
+						tokio::task::spawn_blocking(move || {
+							for job in export_jobs {
+								job();
+							}
+						})
+						.await
+						.unwrap();
+					},
+					move |()| Message::ExportDone(count, format),
+				);
 			}
+		}
+		Message::ExportDone(count, format) => {
+			app_state.status = format!("Exported {count} plots as {format}.");
 		}
 	}
 	Task::none()
