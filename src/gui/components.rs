@@ -1181,8 +1181,6 @@ fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<
 			resize_area_north,
 			resize_area_northeast_top,
 		],
-		row![title_bar()],
-		row![menu_bar()],
 		row![
 			column![
 				resize_area_northwest_side,
@@ -1190,6 +1188,8 @@ fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<
 				resize_area_southwest_side
 			],
 			column![
+				row![title_bar()],
+				row![menu_bar()],
 				underlay.into(),
 				row![
 					resize_area_southwest_bottom,
