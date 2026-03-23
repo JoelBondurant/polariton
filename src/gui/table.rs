@@ -544,6 +544,18 @@ where
 					}
 					cell_x += col_w;
 				}
+				renderer.fill_quad(
+					renderer::Quad {
+						bounds: Rectangle {
+							x: cell_x,
+							y: bounds.y,
+							width: 1.0,
+							height: HEADER_HEIGHT,
+						},
+						..renderer::Quad::default()
+					},
+					colors::TABLE_BORDER,
+				);
 			});
 			renderer.fill_quad(
 				renderer::Quad {
@@ -703,6 +715,18 @@ where
 						}
 						cell_x += col_w;
 					}
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds: Rectangle {
+								x: cell_x,
+								y: row_y,
+								width: 1.0,
+								height: ROW_HEIGHT,
+							},
+							..renderer::Quad::default()
+						},
+						colors::TABLE_BORDER,
+					);
 				}
 			});
 			let total_h = self.total_content_height();
