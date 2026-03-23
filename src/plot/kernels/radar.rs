@@ -1,8 +1,9 @@
 use crate::plot::common::{
-	format_label, AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings,
+	format_label, AxisType, CoordinateTransformer, PathBuilder, PlotBackend, PlotKernel,
+	PlotLayout, PlotSettings,
 };
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Color, Point, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -18,7 +19,7 @@ impl PlotKernel for RadarPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		bounds: Rectangle,
 		_transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -28,10 +29,7 @@ impl PlotKernel for RadarPlotKernel {
 		if num_dims < 3 {
 			return;
 		}
-		let center = Point::new(
-			bounds.width / 2.0,
-			bounds.height / 2.0,
-		);
+		let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
 		let max_radius = (bounds.width.min(bounds.height) / 2.0 - 80.0).max(10.0);
 		let grid_stroke = Stroke {
 			style: Style::Solid(Color::from_rgba(0.5, 0.5, 0.5, 0.2)),
@@ -41,22 +39,24 @@ impl PlotKernel for RadarPlotKernel {
 		let num_circles = settings.x_ticks;
 		for i in 1..=num_circles {
 			let radius = max_radius * (i as f32 / num_circles as f32);
-			let path = Path::new(|builder| {
-				for j in 0..=num_dims {
-					let angle = (j as f32 / num_dims as f32) * 2.0 * std::f32::consts::PI
-						- std::f32::consts::FRAC_PI_2;
-					let p = Point::new(
-						center.x + radius * angle.cos(),
-						center.y + radius * angle.sin(),
-					);
-					if j == 0 {
-						builder.move_to(p);
-					} else {
-						builder.line_to(p);
+			backend.stroke_path(
+				&|builder| {
+					for j in 0..=num_dims {
+						let angle = (j as f32 / num_dims as f32) * 2.0 * std::f32::consts::PI
+							- std::f32::consts::FRAC_PI_2;
+						let p = Point::new(
+							center.x + radius * angle.cos(),
+							center.y + radius * angle.sin(),
+						);
+						if j == 0 {
+							builder.move_to(p);
+						} else {
+							builder.line_to(p);
+						}
 					}
-				}
-			});
-			frame.stroke(&path, grid_stroke);
+				},
+				grid_stroke,
+			);
 		}
 		let axis_stroke = Stroke {
 			style: Style::Solid(Color::from_rgba(1.0, 1.0, 1.0, 0.4)),
@@ -70,12 +70,14 @@ impl PlotKernel for RadarPlotKernel {
 				center.x + max_radius * angle.cos(),
 				center.y + max_radius * angle.sin(),
 			);
-			let path = Path::new(|builder| {
-				builder.move_to(center);
-				builder.line_to(p);
-			});
-			frame.stroke(&path, axis_stroke);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(center);
+					builder.line_to(p);
+				},
+				axis_stroke,
+			);
+			backend.fill_text(iced::widget::canvas::Text {
 				content: self.prepared_data.dimensions[i].clone(),
 				position: Point::new(
 					center.x + (max_radius + 15.0) * angle.cos(),
@@ -108,7 +110,7 @@ impl PlotKernel for RadarPlotKernel {
 						center.x + radius * angle.cos() + 10.0,
 						center.y + radius * angle.sin() + 2.0,
 					);
-					frame.fill_text(iced::widget::canvas::Text {
+					backend.fill_text(iced::widget::canvas::Text {
 						content: format_label(val, AxisType::Linear),
 						position: label_pos,
 						color: Color {
@@ -133,7 +135,7 @@ impl PlotKernel for RadarPlotKernel {
 			let color = settings.color_theme.get_color(t);
 			let mut fill_color = color;
 			fill_color.a = 0.3;
-			let path = Path::new(|builder| {
+			let path_closure = |builder: &mut dyn PathBuilder| {
 				for (d, &val) in row_data.iter().enumerate() {
 					let angle = (d as f32 / num_dims as f32) * 2.0 * std::f32::consts::PI
 						- std::f32::consts::FRAC_PI_2;
@@ -151,10 +153,10 @@ impl PlotKernel for RadarPlotKernel {
 					}
 				}
 				builder.close();
-			});
-			frame.fill(&path, fill_color);
-			frame.stroke(
-				&path,
+			};
+			backend.fill_path(&path_closure, fill_color);
+			backend.stroke_path(
+				&path_closure,
 				Stroke {
 					style: Style::Solid(color),
 					width: 2.0,
@@ -164,7 +166,12 @@ impl PlotKernel for RadarPlotKernel {
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_cats = self.prepared_data.category_names.len();
 		if num_cats == 0 {
 			return;
@@ -180,7 +187,7 @@ impl PlotKernel for RadarPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color {
@@ -199,12 +206,12 @@ impl PlotKernel for RadarPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color,
 			);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.fill_text(iced::widget::canvas::Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -241,13 +248,14 @@ pub fn prepare_radar_data(df: &DataFrame, dims: &[String], cat_col: &str) -> Rad
 			num_categories: 1,
 		};
 	}
-
 	let num_dims = dims.len();
 	let mut ranges = Vec::with_capacity(num_dims);
 	let mut dim_columns = Vec::with_capacity(num_dims);
 	for dim in dims {
 		let col = match df.column(dim) {
-			Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(dim.into(), &DataType::Float64))),
+			Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| {
+				Column::from(Series::new_empty(dim.into(), &DataType::Float64))
+			}),
 			Err(_) => Column::from(Series::new_empty(dim.into(), &DataType::Float64)),
 		};
 		let series = col.f64().unwrap().clone();
@@ -263,7 +271,13 @@ pub fn prepare_radar_data(df: &DataFrame, dims: &[String], cat_col: &str) -> Rad
 		Series::new("dummy_cat".into(), &["All Data"])
 	} else {
 		match df.column(cat_col) {
-			Ok(c) => c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone()).as_materialized_series().clone(),
+			Ok(c) => c
+				.unique()
+				.unwrap_or_else(|_| c.clone())
+				.sort(Default::default())
+				.unwrap_or_else(|_| c.clone())
+				.as_materialized_series()
+				.clone(),
 			Err(_) => Series::new("dummy_cat".into(), &["All Data"]),
 		}
 	};

@@ -4,9 +4,10 @@ use crate::adapters::{
 };
 use crate::gui::{
 	components::{self, PaneType},
-	messages::{Message, PlotMessage},
+	messages::{ExportFormat, Message, PlotMessage},
 	plot_state::PlotState,
 };
+use crate::plot::export::{PngBackend, SvgBackend};
 use iced::{application, widget::pane_grid, window, Element, Size, Task};
 use iced_code_editor::CodeEditor;
 use polars::frame::DataFrame;
@@ -237,6 +238,122 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				}
 			}
 		}
+		Message::Export(format) => {
+			return window::latest().and_then(move |id| {
+				window::size(id).map(move |size| Message::ExportWithWindowSize(format, Some(size)))
+			});
+		}
+		Message::ExportWithWindowSize(format, window_size) => {
+			if let Some(dashboard) = &app_state.dashboard {
+				let size = window_size.unwrap_or(Size::new(1920.0, 1080.0));
+				let main_grid_width = size.width - 20.0;
+				let main_grid_height = size.height - 113.0;
+				let main_grid_bounds = iced::Rectangle {
+					x: 10.0,
+					y: 71.0,
+					width: main_grid_width,
+					height: main_grid_height,
+				};
+				let dashboard_pane_bounds = get_pane_rects(app_state.panes.layout(), main_grid_bounds, 2.0)
+					.into_iter()
+					.find(|(pane, _)| app_state.panes.panes.get(pane) == Some(&PaneType::Dashboard))
+					.map(|(_, rect)| rect)
+					.unwrap_or(main_grid_bounds);
+				for (id, rect) in get_pane_rects(dashboard.layout(), dashboard_pane_bounds, 2.0) {
+					if let Some(plot_state) = dashboard.panes.get(&id) {
+						let width = rect.width;
+						let height = rect.height - 30.0; // Account for plot title bar
+						let bounds = iced::Rectangle {
+							x: 0.0,
+							y: 0.0,
+							width,
+							height,
+						};
+						let padding = 20.0;
+						let settings = plot_state.plot_settings.clone();
+						let _padding_top = padding + settings.plot_padding_top;
+						let _padding_bottom = padding + settings.plot_padding_bottom;
+						let _padding_left = padding + settings.plot_padding_left;
+						let _padding_right = padding + settings.plot_padding_right;
+						let widget = crate::plot::common::PlotWidget {
+							kernel: plot_state.kernel.as_ref(),
+							title: plot_state.current_plot_type.to_string(),
+							padding: 20.0,
+							settings: settings.clone(),
+						};
+						match format {
+							ExportFormat::SVG => {
+								let mut backend = SvgBackend::new(width, height);
+								widget.render(&mut backend, bounds);
+								let svg_content = backend.finish();
+								let filename = format!("plot_{:?}.svg", id);
+								let _ = std::fs::write(filename, svg_content);
+							}
+							ExportFormat::PNG => {
+								let mut backend = PngBackend::new(width as u32, height as u32);
+								widget.render(&mut backend, bounds);
+								let filename = format!("plot_{:?}.png", id);
+								backend.save(std::path::Path::new(&filename));
+							}
+						}
+					}
+				}
+				app_state.status = format!("Exported {} plots as {:?}", dashboard.panes.len(), format);
+			}
+		}
 	}
 	Task::none()
+}
+
+fn get_pane_rects(
+	node: &pane_grid::Node,
+	bounds: iced::Rectangle,
+	spacing: f32,
+) -> Vec<(pane_grid::Pane, iced::Rectangle)> {
+	match node {
+		pane_grid::Node::Pane(pane) => vec![(*pane, bounds)],
+		pane_grid::Node::Split {
+			axis,
+			ratio,
+			a,
+			b,
+			..
+		} => {
+			let (rect_a, rect_b) = match axis {
+				pane_grid::Axis::Horizontal => {
+					let height_a = (bounds.height - spacing) * ratio;
+					let height_b = bounds.height - spacing - height_a;
+					(
+						iced::Rectangle {
+							height: height_a,
+							..bounds
+						},
+						iced::Rectangle {
+							y: bounds.y + height_a + spacing,
+							height: height_b,
+							..bounds
+						},
+					)
+				}
+				pane_grid::Axis::Vertical => {
+					let width_a = (bounds.width - spacing) * ratio;
+					let width_b = bounds.width - spacing - width_a;
+					(
+						iced::Rectangle {
+							width: width_a,
+							..bounds
+						},
+						iced::Rectangle {
+							x: bounds.x + width_a + spacing,
+							width: width_b,
+							..bounds
+						},
+					)
+				}
+			};
+			let mut rects = get_pane_rects(a, rect_a, spacing);
+			rects.extend(get_pane_rects(b, rect_b, spacing));
+			rects
+		}
+	}
 }

@@ -1,6 +1,8 @@
-use crate::plot::common::{AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings, format_label, polars_type_to_axis_type};
+use crate::plot::common::{
+	AxisType, CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout,
+	PlotSettings, format_label, polars_type_to_axis_type,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::Frame;
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -27,7 +29,7 @@ impl PlotKernel for HistogramPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -37,40 +39,60 @@ impl PlotKernel for HistogramPlotKernel {
 		let (x_min, x_max) = self.prepared_data.x_range;
 		let bin_width_data = (x_max - x_min) / num_bins as f64;
 		let max_count = self.prepared_data.max_count as f64;
+		let y_base = if let PlotLayout::Cartesian { y_range, .. } = transform.layout {
+			y_range.0
+		} else {
+			0.0
+		};
 		for (i, &count) in self.prepared_data.bin_counts.iter().enumerate() {
-			if count == 0 { continue; }
+			if count == 0 {
+				continue;
+			}
 			let bin_start_x = x_min + i as f64 * bin_width_data;
 			let bin_end_x = bin_start_x + bin_width_data;
 			let p_top_left = transform.cartesian(bin_start_x, count as f64);
-			let p_bottom_right = transform.cartesian(bin_end_x, 0.0);
+			let p_bottom_right = transform.cartesian(bin_end_x, y_base);
+			let t = count as f32 / max_count as f32;
+			let color = settings.color_theme.get_color(t);
 			let rect = Rectangle {
 				x: p_top_left.x,
 				y: p_top_left.y,
 				width: (p_bottom_right.x - p_top_left.x).max(1.0),
 				height: (p_bottom_right.y - p_top_left.y).max(1.0),
 			};
-			let t = count as f32 / max_count as f32;
-			let color = settings.color_theme.get_color(t);
-			frame.fill_rectangle(rect.position(), rect.size(), color);
-			frame.stroke(&iced::widget::canvas::Path::rectangle(rect.position(), rect.size()), iced::widget::canvas::Stroke {
-				style: iced::widget::canvas::Style::Solid(Color::from_rgba(0.0, 0.0, 0.0, 0.2)),
-				width: 0.5,
-				..Default::default()
-			});
+			backend.fill_rectangle(rect.position(), rect.size(), color);
+			backend.stroke_path(
+				&|builder| {
+					builder.rectangle(rect.position(), rect.size());
+				},
+				iced::widget::canvas::Stroke {
+					style: iced::widget::canvas::Style::Solid(Color::from_rgba(0.0, 0.0, 0.0, 0.2)),
+					width: 0.5,
+					..Default::default()
+				},
+			);
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let max_count = self.prepared_data.max_count;
 		let legend_width = 60.0;
 		let legend_height = 200.0;
 		let legend_padding = 10.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
-			Color { a: 0.6, ..settings.background_color }
+			Color {
+				a: 0.6,
+				..settings.background_color
+			},
 		);
 		let bar_width = 15.0;
 		let bar_height = legend_height - 55.0;
@@ -82,22 +104,28 @@ impl PlotKernel for HistogramPlotKernel {
 			let color = settings.color_theme.get_color(t);
 			let step_height = bar_height / steps as f32;
 			let step_y = bar_y + bar_height - (i as f32 + 1.0) * step_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(bar_x, step_y),
 				iced::Size::new(bar_width, step_height + 0.5),
-				color
+				color,
 			);
 		}
-		frame.stroke(
-			&iced::widget::canvas::Path::rectangle(iced::Point::new(bar_x, bar_y), iced::Size::new(bar_width, bar_height)),
+		backend.stroke_path(
+			&|builder| {
+				builder.move_to(iced::Point::new(bar_x, bar_y));
+				builder.line_to(iced::Point::new(bar_x + bar_width, bar_y));
+				builder.line_to(iced::Point::new(bar_x + bar_width, bar_y + bar_height));
+				builder.line_to(iced::Point::new(bar_x, bar_y + bar_height));
+				builder.close();
+			},
 			iced::widget::canvas::Stroke {
 				style: iced::widget::canvas::Style::Solid(settings.decoration_color),
 				width: 1.0,
 				..Default::default()
-			}
+			},
 		);
 		let label_x = bar_x + bar_width + 5.0;
-		frame.fill_text(iced::widget::canvas::Text {
+		backend.fill_text(iced::widget::canvas::Text {
 			content: format!("{}", max_count),
 			position: iced::Point::new(label_x, bar_y),
 			color: settings.decoration_color,
@@ -105,7 +133,7 @@ impl PlotKernel for HistogramPlotKernel {
 			align_y: iced::alignment::Vertical::Top,
 			..Default::default()
 		});
-		frame.fill_text(iced::widget::canvas::Text {
+		backend.fill_text(iced::widget::canvas::Text {
 			content: "0".to_string(),
 			position: iced::Point::new(label_x, bar_y + bar_height),
 			color: settings.decoration_color,
@@ -113,7 +141,7 @@ impl PlotKernel for HistogramPlotKernel {
 			align_y: iced::alignment::Vertical::Bottom,
 			..Default::default()
 		});
-		frame.fill_text(iced::widget::canvas::Text {
+		backend.fill_text(iced::widget::canvas::Text {
 			content: "Frequency".to_string(),
 			position: iced::Point::new(x + legend_width / 2.0, y + 10.0),
 			color: settings.decoration_color,
@@ -184,7 +212,6 @@ pub fn prepare_histogram_data(df: &DataFrame, val_col: &str, num_bins: usize) ->
 			y_label: "Frequency".to_string(),
 		};
 	}
-
 	let val_dtype = df.column(val_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let x_axis_type = polars_type_to_axis_type(&val_dtype);
 	let y_axis_type = AxisType::Linear;

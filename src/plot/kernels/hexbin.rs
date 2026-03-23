@@ -1,6 +1,9 @@
-use crate::plot::common::{AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings};
+use crate::plot::common::{
+	AxisType, CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout,
+	PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Color, Rectangle};
 use polars::lazy::prelude::*;
 use polars::prelude::*;
@@ -28,7 +31,7 @@ impl PlotKernel for HexbinPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -37,12 +40,14 @@ impl PlotKernel for HexbinPlotKernel {
 		let radius = self.prepared_data.radius as f64;
 		let sqrt_3 = 3.0f64.sqrt();
 		let max_count = self.prepared_data.max_count as f64;
-		frame.with_clip(bounds, |frame| {
+		backend.with_clip(bounds, &mut |backend| {
 			for (&(q, r), &count) in &self.prepared_data.bins {
-				if count == 0 { continue; }
+				if count == 0 {
+					continue;
+				}
 				let lx = radius * (sqrt_3 * q as f64 + sqrt_3 / 2.0 * r as f64);
 				let ly = radius * (3.0 / 2.0 * r as f64);
-				let hex_path = Path::new(|builder| {
+				let hex_path = &|builder: &mut dyn crate::plot::common::PathBuilder| {
 					for i in 0..6 {
 						let angle_deg = 60.0 * i as f64 - 30.0;
 						let angle_rad = std::f64::consts::PI / 180.0 * angle_deg;
@@ -56,30 +61,41 @@ impl PlotKernel for HexbinPlotKernel {
 						}
 					}
 					builder.close();
-				});
+				};
 				let t = count as f32 / max_count as f32;
 				let color = settings.color_theme.get_color(t);
-				frame.fill(&hex_path, color);
-				frame.stroke(&hex_path, Stroke {
-					style: Style::Solid(Color::from_rgba(0.0, 0.0, 0.0, 0.1)),
-					width: 0.5,
-					..Default::default()
-				});
+				backend.fill_path(hex_path, color);
+				backend.stroke_path(
+					hex_path,
+					Stroke {
+						style: Style::Solid(Color::from_rgba(0.0, 0.0, 0.0, 0.1)),
+						width: 0.5,
+						..Default::default()
+					},
+				);
 			}
 		});
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let max_count = self.prepared_data.max_count;
 		let legend_width = 60.0;
 		let legend_height = 200.0;
 		let legend_padding = 10.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
-			Color { a: 0.6, ..settings.background_color }
+			Color {
+				a: 0.6,
+				..settings.background_color
+			},
 		);
 		let bar_width = 15.0;
 		let bar_height = legend_height - 55.0;
@@ -91,22 +107,28 @@ impl PlotKernel for HexbinPlotKernel {
 			let color = settings.color_theme.get_color(t);
 			let step_height = bar_height / steps as f32;
 			let step_y = bar_y + bar_height - (i as f32 + 1.0) * step_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(bar_x, step_y),
 				iced::Size::new(bar_width, step_height + 0.5),
-				color
+				color,
 			);
 		}
-		frame.stroke(
-			&Path::rectangle(iced::Point::new(bar_x, bar_y), iced::Size::new(bar_width, bar_height)),
+		backend.stroke_path(
+			&|builder| {
+				builder.move_to(iced::Point::new(bar_x, bar_y));
+				builder.line_to(iced::Point::new(bar_x + bar_width, bar_y));
+				builder.line_to(iced::Point::new(bar_x + bar_width, bar_y + bar_height));
+				builder.line_to(iced::Point::new(bar_x, bar_y + bar_height));
+				builder.close();
+			},
 			Stroke {
 				style: Style::Solid(settings.decoration_color),
 				width: 1.0,
 				..Default::default()
-			}
+			},
 		);
 		let label_x = bar_x + bar_width + 5.0;
-		frame.fill_text(iced::widget::canvas::Text {
+		backend.fill_text(iced::widget::canvas::Text {
 			content: format!("{}", max_count),
 			position: iced::Point::new(label_x, bar_y),
 			color: settings.decoration_color,
@@ -114,7 +136,7 @@ impl PlotKernel for HexbinPlotKernel {
 			align_y: iced::alignment::Vertical::Top,
 			..Default::default()
 		});
-		frame.fill_text(iced::widget::canvas::Text {
+		backend.fill_text(iced::widget::canvas::Text {
 			content: "0".to_string(),
 			position: iced::Point::new(label_x, bar_y + bar_height),
 			color: settings.decoration_color,
@@ -122,7 +144,7 @@ impl PlotKernel for HexbinPlotKernel {
 			align_y: iced::alignment::Vertical::Bottom,
 			..Default::default()
 		});
-		frame.fill_text(iced::widget::canvas::Text {
+		backend.fill_text(iced::widget::canvas::Text {
 			content: "Count".to_string(),
 			position: iced::Point::new(x + legend_width / 2.0, y + 10.0),
 			color: settings.decoration_color,
@@ -238,7 +260,6 @@ pub fn prepare_hexbin_data(df: &DataFrame, radius: f32) -> HexbinPreparedData {
 			y_label: "y".to_string(),
 		};
 	}
-
 	let x_col_series = match df.column("x") {
 		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty("x".into(), &DataType::Float64))),
 		Err(_) => Column::from(Series::new_empty("x".into(), &DataType::Float64)),
@@ -251,7 +272,6 @@ pub fn prepare_hexbin_data(df: &DataFrame, radius: f32) -> HexbinPreparedData {
 	let y_col = y_col_series.f64().unwrap();
 	let x_range = (x_col.min().unwrap_or(0.0), x_col.max().unwrap_or(1.0));
 	let y_range = (y_col.min().unwrap_or(0.0), y_col.max().unwrap_or(1.0));
-
 	let binned = match bin_data_to_hex(df.clone(), radius) {
 		Ok(df) => df,
 		Err(_) => {
@@ -266,7 +286,6 @@ pub fn prepare_hexbin_data(df: &DataFrame, radius: f32) -> HexbinPreparedData {
 			};
 		}
 	};
-
 	let q_col = binned.column("q").and_then(|c| c.i32()).expect("q column not found");
 	let r_col = binned.column("r").and_then(|c| c.i32()).expect("r column not found");
 	let count_col = binned.column("count").and_then(|c| c.u32()).expect("count column not found");

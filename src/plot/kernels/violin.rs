@@ -1,6 +1,8 @@
-use crate::plot::common::{CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings};
+use crate::plot::common::{
+	CoordinateTransformer, PathBuilder, PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{self, Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -22,7 +24,7 @@ impl PlotKernel for ViolinPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		cursor: Cursor,
@@ -52,7 +54,7 @@ impl PlotKernel for ViolinPlotKernel {
 				}
 			}
 			if first_bin >= last_bin { continue; }
-			let violin_path = Path::new(|builder| {
+			let violin_path_closure = |builder: &mut dyn PathBuilder| {
 				for bin in first_bin..=last_bin {
 					let data_y = y_min + bin as f64 * y_step;
 					let density = self.prepared_data.kde_data[i * tex_height_bins + bin];
@@ -70,14 +72,14 @@ impl PlotKernel for ViolinPlotKernel {
 					builder.line_to(iced::Point::new(p.x + density * width_scale, p.y));
 				}
 				builder.close();
-			});
-			frame.fill(&violin_path, color);
+			};
+			backend.fill_path(&violin_path_closure, color);
 			let border_stroke = Stroke {
 				style: Style::Solid(settings.decoration_color),
 				width: 2.5,
 				..Default::default()
 			};
-			frame.stroke(&violin_path, border_stroke);
+			backend.stroke_path(&violin_path_closure, border_stroke);
 			if let Some(&median_val) = self.prepared_data.medians.get(i) {
 				let (median_px, _) = transform.categorical(i, median_val);
 				let bin_idx = (((median_val - y_min) / (y_max - y_min)) * (tex_height_bins as f64 - 1.0))
@@ -85,15 +87,17 @@ impl PlotKernel for ViolinPlotKernel {
 				let bin_idx = bin_idx.min(tex_height_bins - 1);
 				let density = self.prepared_data.kde_data[i * tex_height_bins + bin_idx];
 				let line_half_width = density * width_scale;
-				let median_path = Path::new(|builder| {
-					builder.move_to(iced::Point::new(median_px.x - line_half_width, median_px.y));
-					builder.line_to(iced::Point::new(median_px.x + line_half_width, median_px.y));
-				});
-				frame.stroke(&median_path, Stroke {
-					style: Style::Solid(settings.decoration_color),
-					width: 4.0,
-					..Default::default()
-				});
+				backend.stroke_path(
+					&|builder| {
+						builder.move_to(iced::Point::new(median_px.x - line_half_width, median_px.y));
+						builder.line_to(iced::Point::new(median_px.x + line_half_width, median_px.y));
+					},
+					Stroke {
+						style: Style::Solid(settings.decoration_color),
+						width: 4.0,
+						..Default::default()
+					},
+				);
 			}
 		}
 		if let Some(cursor_pos) = cursor.position() {
@@ -104,12 +108,16 @@ impl PlotKernel for ViolinPlotKernel {
 				if cursor_pos.x >= left_edge && cursor_pos.x <= right_edge {
 					if let Some(&median_val) = self.prepared_data.medians.get(i) {
 						let (median_px, _) = transform.categorical(i, median_val);
-						let path = canvas::Path::circle(median_px, 5.0);
-						frame.stroke(&path, Stroke {
-							style: Style::Solid(Color::from_rgb(1.0, 0.2, 0.2)),
-							width: 2.0,
-							..Default::default()
-						});
+						backend.stroke_path(
+							&|builder| {
+								builder.circle(median_px, 5.0);
+							},
+							Stroke {
+								style: Style::Solid(Color::from_rgb(1.0, 0.2, 0.2)),
+								width: 2.0,
+								..Default::default()
+							},
+						);
 					}
 					break;
 				}
@@ -117,7 +125,12 @@ impl PlotKernel for ViolinPlotKernel {
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_cats = self.prepared_data.categories.len();
 		if num_cats == 0 { return; }
 		let max_rows = settings.max_legend_rows.max(1) as usize;
@@ -131,7 +144,7 @@ impl PlotKernel for ViolinPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color { a: 0.6, ..settings.background_color }
@@ -143,12 +156,12 @@ impl PlotKernel for ViolinPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color
 			);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.fill_text(iced::widget::canvas::Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -241,7 +254,6 @@ pub fn prepare_violin_data(
 			y_label: val_col.to_string(),
 		};
 	}
-
 	let (y_min, y_max) = match manual_range {
 		Some(r) => r,
 		None => {
@@ -259,7 +271,6 @@ pub fn prepare_violin_data(
 			}
 		}
 	};
-	
 	let group_data_res = if cat_col.is_empty() {
 		df.clone()
 			.lazy()
@@ -280,7 +291,6 @@ pub fn prepare_violin_data(
 			.sort([cat_col], Default::default())
 			.collect()
 	};
-
 	let group_data = match group_data_res {
 		Ok(df) => df,
 		Err(_) => {
@@ -295,7 +305,6 @@ pub fn prepare_violin_data(
 			};
 		}
 	};
-
 	let actual_cat_col = if cat_col.is_empty() || !group_data.get_column_names().iter().any(|name| name.as_str() == cat_col) { "dummy_cat" } else { cat_col };
 	let num_violins = group_data.height();
 	let medians_series = group_data
@@ -303,10 +312,8 @@ pub fn prepare_violin_data(
 		.map(|c| c.as_materialized_series().cast(&DataType::Float64).unwrap_or_else(|_| Series::new_empty("median".into(), &DataType::Float64)))
 		.unwrap_or_else(|_| Series::new_empty("median".into(), &DataType::Float64));
 	let medians_f64 = medians_series.f64().unwrap();
-	
 	let values_list_series = group_data.column("values").map(|c| c.as_materialized_series().clone()).unwrap_or_else(|_| Series::new_empty("values".into(), &DataType::List(Box::new(DataType::Float64))));
 	let values_list = values_list_series.list().unwrap();
-
 	let categories_series = group_data.column(actual_cat_col).map(|c| c.as_materialized_series().clone()).unwrap_or_else(|_| Series::new("dummy_cat".into(), &["All Data"]));
 	let categories: Vec<String> = if let Ok(ca) = categories_series.i32() {
 		ca.into_no_null_iter().map(|i| i.to_string()).collect()

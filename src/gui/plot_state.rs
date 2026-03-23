@@ -20,8 +20,9 @@ use crate::plot::kernels::scatter::{self, ScatterPlotKernel};
 use crate::plot::kernels::stacked_area::{self, StackedAreaPlotKernel};
 use crate::plot::kernels::stacked_bar::{self, StackedBarPlotKernel};
 use crate::plot::kernels::violin::{self, ViolinPlotKernel};
+use iced::{Rectangle, Size};
 use polars::frame::DataFrame;
-use polars::prelude::{DataType, Column};
+use polars::prelude::{Column, DataType};
 use std::sync::Arc;
 
 pub struct PlotState {
@@ -29,6 +30,7 @@ pub struct PlotState {
 	pub hovered_info: Option<String>,
 	pub current_plot_type: PlotType,
 	pub plot_settings: PlotSettings,
+	pub last_bounds: Rectangle,
 	pub max_legend_rows_input: String,
 	pub legend_x_input: String,
 	pub legend_y_input: String,
@@ -78,6 +80,7 @@ impl PlotState {
 			kernel,
 			hovered_info: None,
 			current_plot_type: plot_type,
+			last_bounds: Rectangle::with_size(Size::new(width as f32, height as f32)),
 			bg_color_input: colors::color_to_hex(plot_settings.background_color),
 			decoration_color_input: colors::color_to_hex(plot_settings.decoration_color),
 			x_min_input: String::new(),
@@ -128,22 +131,16 @@ impl PlotState {
 
 	pub fn update(&mut self, message: PlotMessage) {
 		match message {
-			PlotMessage::RefreshData => {
-				// Handled in main update
-			}
+			PlotMessage::RefreshData => {}
 			PlotMessage::UpdateHover(hover) => {
 				self.hovered_info = hover;
+			}
+			PlotMessage::UpdateBounds(bounds) => {
+				self.last_bounds = bounds;
 			}
 			PlotMessage::ChangePlotType(new_type) => {
 				if new_type != self.current_plot_type {
 					self.current_plot_type = new_type;
-					// We need a dataframe to change plot type... 
-					// but PlotState doesn't hold it. 
-					// For now, it will keep old kernel until manual refresh if we don't have it.
-					// Actually, the user says " regeneration from the data is a new setting in the plot setting modal".
-					// So changing plot type should probably also be a manual step or use cached df?
-					// Let's just use empty df for now if we don't have one, 
-					// or better, handle this in main state.
 				}
 			}
 			PlotMessage::SetMaxLegendRows(rows) => {
@@ -173,14 +170,16 @@ impl PlotState {
 				self.plot_settings.background_color = color;
 				self.bg_color_input = colors::color_to_hex(color);
 				self.plot_settings.decoration_color = colors::contrast_color(color);
-				self.decoration_color_input = colors::color_to_hex(self.plot_settings.decoration_color);
+				self.decoration_color_input =
+					colors::color_to_hex(self.plot_settings.decoration_color);
 			}
 			PlotMessage::ChangeBackgroundHex(hex) => {
 				self.bg_color_input = hex.clone();
 				if let Some(color) = colors::hex_to_color(&hex) {
 					self.plot_settings.background_color = color;
 					self.plot_settings.decoration_color = colors::contrast_color(color);
-					self.decoration_color_input = colors::color_to_hex(self.plot_settings.decoration_color);
+					self.decoration_color_input =
+						colors::color_to_hex(self.plot_settings.decoration_color);
 				}
 			}
 			PlotMessage::ChangeDecorationColor(color) => {
@@ -532,7 +531,10 @@ pub fn create_plot(
 			})
 		}
 		PlotType::Parallel => {
-			let dims = numeric_cols.iter().map(|s: &&str| s.to_string()).collect::<Vec<_>>();
+			let dims = numeric_cols
+				.iter()
+				.map(|s: &&str| s.to_string())
+				.collect::<Vec<_>>();
 			let cat = string_cols.first().copied().unwrap_or("");
 			let prepared = parallel::prepare_parallel_data(df, &dims, cat);
 			Box::new(ParallelPlotKernel {
@@ -540,7 +542,10 @@ pub fn create_plot(
 			})
 		}
 		PlotType::Radar => {
-			let dims = numeric_cols.iter().map(|s: &&str| s.to_string()).collect::<Vec<_>>();
+			let dims = numeric_cols
+				.iter()
+				.map(|s: &&str| s.to_string())
+				.collect::<Vec<_>>();
 			let cat = string_cols.first().copied().unwrap_or("");
 			let prepared = radar::prepare_radar_data(df, &dims, cat);
 			Box::new(RadarPlotKernel {

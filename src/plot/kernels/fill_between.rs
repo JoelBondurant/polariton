@@ -1,6 +1,9 @@
-use crate::plot::common::{AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings, format_label, polars_type_to_axis_type};
+use crate::plot::common::{
+	format_label, polars_type_to_axis_type, AxisType, CoordinateTransformer,
+	PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::Rectangle;
 use polars::prelude::*;
 use std::sync::Arc;
@@ -27,7 +30,7 @@ impl PlotKernel for FillBetweenPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -42,38 +45,42 @@ impl PlotKernel for FillBetweenPlotKernel {
 			c.a = 0.9;
 			c
 		};
-		let band_path = Path::new(|builder| {
-			for (i, &x) in self.prepared_data.x.iter().enumerate() {
-				let p = transform.cartesian(x, self.prepared_data.y_upper[i]);
-				if i == 0 {
-					builder.move_to(p);
-				} else {
+		backend.fill_path(
+			&|builder| {
+				for (i, &x) in self.prepared_data.x.iter().enumerate() {
+					let p = transform.cartesian(x, self.prepared_data.y_upper[i]);
+					if i == 0 {
+						builder.move_to(p);
+					} else {
+						builder.line_to(p);
+					}
+				}
+				for (i, &x) in self.prepared_data.x.iter().enumerate().rev() {
+					let p = transform.cartesian(x, self.prepared_data.y_lower[i]);
 					builder.line_to(p);
 				}
-			}
-			for (i, &x) in self.prepared_data.x.iter().enumerate().rev() {
-				let p = transform.cartesian(x, self.prepared_data.y_lower[i]);
-				builder.line_to(p);
-			}
-			builder.close();
-		});
-		frame.fill(&band_path, band_color);
-		let line_path = Path::new(|builder| {
-			for (i, &x) in self.prepared_data.x.iter().enumerate() {
-				let p = transform.cartesian(x, self.prepared_data.y_mid[i]);
-				if i == 0 {
-					builder.move_to(p);
-				} else {
-					builder.line_to(p);
-				}
-			}
-		});
+				builder.close();
+			},
+			band_color,
+		);
 		let stroke = Stroke {
 			style: Style::Solid(line_color),
 			width: 2.5,
 			..Default::default()
 		};
-		frame.stroke(&line_path, stroke);
+		backend.stroke_path(
+			&|builder| {
+				for (i, &x) in self.prepared_data.x.iter().enumerate() {
+					let p = transform.cartesian(x, self.prepared_data.y_mid[i]);
+					if i == 0 {
+						builder.move_to(p);
+					} else {
+						builder.line_to(p);
+					}
+				}
+			},
+			stroke,
+		);
 	}
 
 	fn hover(&self, transform: &CoordinateTransformer, cursor: Cursor) -> Option<String> {
@@ -153,12 +160,10 @@ pub fn prepare_fill_between_data(
 			y_label: y_mid_col.to_string(),
 		};
 	}
-
 	let x_dtype = df.column(x_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let y_mid_dtype = if y_mid_col.is_empty() { DataType::Float64 } else { df.column(y_mid_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64) };
 	let x_axis_type = polars_type_to_axis_type(&x_dtype);
 	let y_axis_type = polars_type_to_axis_type(&y_mid_dtype);
-
 	let x_series = match df.column(x_col) {
 		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(x_col.into(), &DataType::Float64))).as_materialized_series().f64().unwrap().into_no_null_iter().collect::<Vec<_>>(),
 		Err(_) => vec![],
@@ -181,15 +186,12 @@ pub fn prepare_fill_between_data(
 			Err(_) => vec![0.0; x_series.len()],
 		}
 	};
-
 	let x_min = x_series.iter().copied().fold(f64::INFINITY, f64::min);
 	let x_max = x_series.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 	let y_min = y_lower.iter().copied().fold(f64::INFINITY, f64::min);
 	let y_max = y_upper.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-
 	let (x_min, x_max) = if x_min.is_infinite() { (0.0, 1.0) } else { (x_min, x_max) };
 	let (y_min, y_max) = if y_min.is_infinite() { (0.0, 1.0) } else { (y_min, y_max) };
-
 	let x_pad = (x_max - x_min).max(0.1) * 0.001;
 	let y_pad = (y_max - y_min).max(0.1) * 0.001;
 	FillBetweenPreparedData {

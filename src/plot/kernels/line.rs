@@ -1,6 +1,9 @@
-use crate::plot::common::{AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings, format_label, polars_type_to_axis_type};
+use crate::plot::common::{
+	AxisType, CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout,
+	PlotSettings, format_label, polars_type_to_axis_type,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::Rectangle;
 use polars::prelude::*;
 use std::sync::Arc;
@@ -27,7 +30,7 @@ impl PlotKernel for LinePlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -40,33 +43,45 @@ impl PlotKernel for LinePlotKernel {
 				width: 2.0,
 				..Default::default()
 			};
-			let path = Path::new(|builder| {
-				for (i, p) in series.points.iter().enumerate() {
-					let pixel_p = transform.cartesian(p[0], p[1]);
-					if i == 0 {
-						builder.move_to(pixel_p);
-					} else {
-						builder.line_to(pixel_p);
+			backend.stroke_path(
+				&|builder| {
+					for (i, p) in series.points.iter().enumerate() {
+						let pixel_p = transform.cartesian(p[0], p[1]);
+						if i == 0 {
+							builder.move_to(pixel_p);
+						} else {
+							builder.line_to(pixel_p);
+						}
 					}
-				}
-			});
-			frame.stroke(&path, stroke);
+				},
+				stroke,
+			);
 		}
 	}
 
 	fn hover(&self, transform: &CoordinateTransformer, cursor: Cursor) -> Option<String> {
 		if let Some(cursor_pos) = cursor.position()
-			&& let Some((x, y)) = transform.pixel_to_cartesian(cursor_pos) {
-			return Some(format!("X: {}, Y: {}", 
+			&& let Some((x, y)) = transform.pixel_to_cartesian(cursor_pos)
+		{
+			return Some(format!(
+				"X: {}, Y: {}",
 				format_label(x, self.prepared_data.x_axis_type),
-				format_label(y, self.prepared_data.y_axis_type)));
+				format_label(y, self.prepared_data.y_axis_type)
+			));
 		}
 		None
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_series = self.prepared_data.series.len();
-		if num_series == 0 { return; }
+		if num_series == 0 {
+			return;
+		}
 		let max_rows = settings.max_legend_rows.max(1) as usize;
 		let num_cols = num_series.div_ceil(max_rows);
 		let actual_rows = num_series.min(max_rows);
@@ -78,10 +93,13 @@ impl PlotKernel for LinePlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
-			iced::Color { a: 0.6, ..settings.background_color }
+			iced::Color {
+				a: 0.6,
+				..settings.background_color
+			},
 		);
 		for (i, series) in self.prepared_data.series.iter().enumerate() {
 			let color = settings.color_theme.get_color(series.color_t);
@@ -94,12 +112,17 @@ impl PlotKernel for LinePlotKernel {
 				width: 3.0,
 				..Default::default()
 			};
-			let line_path = Path::new(|builder| {
-				builder.move_to(iced::Point::new(item_x, item_y + item_height / 2.0));
-				builder.line_to(iced::Point::new(item_x + line_width, item_y + item_height / 2.0));
-			});
-			frame.stroke(&line_path, stroke);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(iced::Point::new(item_x, item_y + item_height / 2.0));
+					builder.line_to(iced::Point::new(
+						item_x + line_width,
+						item_y + item_height / 2.0,
+					));
+				},
+				stroke,
+			);
+			backend.fill_text(iced::widget::canvas::Text {
 				content: series.name.clone(),
 				position: iced::Point::new(item_x + line_width + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -151,12 +174,10 @@ pub fn prepare_line_data(
 		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(y_col.into(), &DataType::Float64))),
 		Err(_) => Column::from(Series::new_empty(y_col.into(), &DataType::Float64)),
 	};
-
 	let x_dtype = df.column(x_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let y_dtype = df.column(y_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let x_axis_type = polars_type_to_axis_type(&x_dtype);
 	let y_axis_type = polars_type_to_axis_type(&y_dtype);
-
 	let x_series = x_col_series.f64().unwrap();
 	let y_series = y_col_series.f64().unwrap();
 	let x_range = (x_series.min().unwrap_or(0.0), x_series.max().unwrap_or(1.0));
@@ -167,7 +188,6 @@ pub fn prepare_line_data(
 	let y_pad = (y_range.1 - y_range.0) * 0.05;
 	let x_range = (x_range.0 - x_pad, x_range.1 + x_pad);
 	let y_range = (y_range.0 - y_pad, y_range.1 + y_pad);
-	
 	if df.height() == 0 || x_col.is_empty() || y_col.is_empty() {
 		return LinePreparedData {
 			series: vec![],
@@ -179,7 +199,6 @@ pub fn prepare_line_data(
 			y_label: y_col.to_string(),
 		};
 	}
-
 	let mut series_list = Vec::new();
 	let partitions = if cat_col.is_empty() {
 		vec![df.clone()]
@@ -200,7 +219,6 @@ pub fn prepare_line_data(
 				cat_val.to_string().replace("\"", "")
 			}
 		};
-		
 		let xs_col = match group_df.column(x_col) {
 			Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(x_col.into(), &DataType::Float64))),
 			Err(_) => Column::from(Series::new_empty(x_col.into(), &DataType::Float64)),
@@ -209,7 +227,6 @@ pub fn prepare_line_data(
 			Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(y_col.into(), &DataType::Float64))),
 			Err(_) => Column::from(Series::new_empty(y_col.into(), &DataType::Float64)),
 		};
-		
 		let xs = xs_col.f64().unwrap();
 		let ys = ys_col.f64().unwrap();
 		let t = if num_partitions > 1 {

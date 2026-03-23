@@ -1,9 +1,9 @@
 use crate::plot::common::{
-	format_label, polars_type_to_axis_type, AxisType, CoordinateTransformer, PlotKernel,
-	PlotLayout, PlotSettings,
+	format_label, polars_type_to_axis_type, AxisType, CoordinateTransformer,
+	PlotBackend, PlotKernel, PlotLayout, PlotSettings,
 };
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style, Text};
+use iced::widget::canvas::{Stroke, Style, Text};
 use iced::{Color, Pixels, Point, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ impl PlotKernel for BubblePlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -70,10 +70,16 @@ impl PlotKernel for BubblePlotKernel {
 			let color = settings.color_theme.get_color(t_color);
 			let t_size = ((point.size_val - size_min) / size_delta) as f32;
 			let radius = 2.0 + t_size * 28.0;
-			let circle = Path::circle(p, radius);
-			frame.fill(&circle, Color { a: 0.7, ..color });
-			frame.stroke(
-				&circle,
+			backend.fill_path(
+				&|builder| {
+					builder.circle(p, radius);
+				},
+				Color { a: 0.7, ..color },
+			);
+			backend.stroke_path(
+				&|builder| {
+					builder.circle(p, radius);
+				},
 				Stroke {
 					style: Style::Solid(Color { a: 0.9, ..color }),
 					width: 1.0,
@@ -83,7 +89,12 @@ impl PlotKernel for BubblePlotKernel {
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let color_min = self.prepared_data.color_range.0;
 		let color_max = self.prepared_data.color_range.1;
 		let size_min = self.prepared_data.size_range.0;
@@ -93,7 +104,7 @@ impl PlotKernel for BubblePlotKernel {
 		let legend_padding = 20.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color {
@@ -111,14 +122,14 @@ impl PlotKernel for BubblePlotKernel {
 			let color = settings.color_theme.get_color(t);
 			let step_height = bar_height / steps as f32;
 			let step_y = bar_y + bar_height - (i as f32 + 1.0) * step_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				Point::new(color_bar_x, step_y),
 				iced::Size::new(bar_width, step_height + 0.5),
 				color,
 			);
 		}
 		let color_label_x = color_bar_x + bar_width + 8.0;
-		frame.fill_text(Text {
+		backend.fill_text(Text {
 			content: format!("{:.1}", color_max),
 			position: Point::new(color_label_x, bar_y),
 			color: settings.decoration_color,
@@ -126,7 +137,7 @@ impl PlotKernel for BubblePlotKernel {
 			align_y: iced::alignment::Vertical::Top,
 			..Default::default()
 		});
-		frame.fill_text(Text {
+		backend.fill_text(Text {
 			content: format!("{:.1}", color_min),
 			position: Point::new(color_label_x, bar_y + bar_height),
 			color: settings.decoration_color,
@@ -134,7 +145,7 @@ impl PlotKernel for BubblePlotKernel {
 			align_y: iced::alignment::Vertical::Bottom,
 			..Default::default()
 		});
-		frame.fill_text(Text {
+		backend.fill_text(Text {
 			content: self.prepared_data.color_label.clone(),
 			position: Point::new(color_bar_x + bar_width / 2.0, y + 15.0),
 			color: settings.decoration_color,
@@ -145,7 +156,7 @@ impl PlotKernel for BubblePlotKernel {
 		});
 		let size_legend_x = x + legend_padding;
 		let size_title_x = size_legend_x + 40.0;
-		frame.fill_text(Text {
+		backend.fill_text(Text {
 			content: self.prepared_data.size_label.clone(),
 			position: Point::new(size_title_x, y + 15.0),
 			color: settings.decoration_color,
@@ -164,23 +175,26 @@ impl PlotKernel for BubblePlotKernel {
 			let sample_y =
 				(bar_y + bar_height - min_radius) - t * (bar_height - max_radius - min_radius);
 			let circle_center = Point::new(size_legend_x + 35.0, sample_y);
-			let circle = Path::circle(circle_center, radius);
-			frame.fill(
-				&circle,
+			backend.fill_path(
+				&|builder| {
+					builder.circle(circle_center, radius);
+				},
 				Color {
 					a: 0.5,
 					..settings.decoration_color
 				},
 			);
-			frame.stroke(
-				&circle,
+			backend.stroke_path(
+				&|builder| {
+					builder.circle(circle_center, radius);
+				},
 				Stroke {
 					style: Style::Solid(settings.decoration_color),
 					width: 1.0,
 					..Default::default()
 				},
 			);
-			frame.fill_text(Text {
+			backend.fill_text(Text {
 				content: format!("{:.1}", val),
 				position: Point::new(size_legend_x + 75.0, sample_y),
 				color: settings.decoration_color,
@@ -259,7 +273,6 @@ pub fn prepare_bubble_data(
 	let y_dtype = df.column(y_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let x_axis_type = polars_type_to_axis_type(&x_dtype);
 	let y_axis_type = polars_type_to_axis_type(&y_dtype);
-
 	let xs = match df.column(x_col) {
 		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(x_col.into(), &DataType::Float64))),
 		Err(_) => Column::from(Series::new_empty(x_col.into(), &DataType::Float64)),

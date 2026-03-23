@@ -1,8 +1,8 @@
 use crate::plot::common::{
-	CoordinateTransformer, Orientation, PlotKernel, PlotLayout, PlotSettings,
+	CoordinateTransformer, Orientation, PlotBackend, PlotKernel, PlotLayout, PlotSettings,
 };
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Text};
+use iced::widget::canvas::Text;
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::collections::HashMap;
@@ -35,7 +35,7 @@ impl PlotKernel for StackedBarPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -45,12 +45,17 @@ impl PlotKernel for StackedBarPlotKernel {
 		let num_groups = self.prepared_data.group_names.len();
 		match self.orientation {
 			Orientation::Vertical => {
+				let y_base = if let PlotLayout::CategoricalX { y_range, .. } = transform.layout {
+					y_range.0
+				} else {
+					0.0
+				};
 				let total_band_width = transform.bounds.width / num_cats as f32;
 				let bar_width = total_band_width * 0.8;
 				let bar_offset = (total_band_width - bar_width) / 2.0;
 				for i in 0..num_cats {
-					let cat_left = transform.bounds.x + (i as f32 * total_band_width) + bar_offset;
-					let mut current_y = 0.0f64;
+					let cat_left = (i as f32 * total_band_width) + bar_offset;
+					let mut current_y = y_base;
 					for j in 0..num_groups {
 						let val = self.prepared_data.category_values[i][j];
 						if val <= 0.0 {
@@ -70,20 +75,23 @@ impl PlotKernel for StackedBarPlotKernel {
 							0.5
 						};
 						let color = settings.color_theme.get_color(t);
-						frame.fill_rectangle(bar_rect.position(), bar_rect.size(), color);
+						backend.fill_rectangle(bar_rect.position(), bar_rect.size(), color);
 						current_y += val;
 					}
 				}
 			}
 			Orientation::Horizontal => {
+				let x_base = if let PlotLayout::CategoricalY { x_range, .. } = transform.layout {
+					x_range.0
+				} else {
+					0.0
+				};
 				let total_band_height = transform.bounds.height / num_cats as f32;
 				let bar_height = total_band_height * 0.8;
 				let bar_offset = (total_band_height - bar_height) / 2.0;
 				for i in 0..num_cats {
-					let cat_top = transform.bounds.y
-						+ (num_cats - 1 - i) as f32 * total_band_height
-						+ bar_offset;
-					let mut current_x = 0.0f64;
+					let cat_top = (num_cats - 1 - i) as f32 * total_band_height + bar_offset;
+					let mut current_x = x_base;
 					for j in 0..num_groups {
 						let val = self.prepared_data.category_values[i][j];
 						if val <= 0.0 {
@@ -103,7 +111,7 @@ impl PlotKernel for StackedBarPlotKernel {
 							0.5
 						};
 						let color = settings.color_theme.get_color(t);
-						frame.fill_rectangle(bar_rect.position(), bar_rect.size(), color);
+						backend.fill_rectangle(bar_rect.position(), bar_rect.size(), color);
 						current_x += val;
 					}
 				}
@@ -204,7 +212,12 @@ impl PlotKernel for StackedBarPlotKernel {
 		None
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_groups = self.prepared_data.group_names.len();
 		if num_groups == 0 {
 			return;
@@ -220,7 +233,7 @@ impl PlotKernel for StackedBarPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color {
@@ -239,12 +252,12 @@ impl PlotKernel for StackedBarPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color,
 			);
-			frame.fill_text(Text {
+			backend.fill_text(Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -296,13 +309,19 @@ pub fn prepare_stacked_bar_data(
 			y_label: val_col.to_string(),
 		};
 	}
-
 	let (categories, _categories_series) = if cat_col.is_empty() {
-		(vec!["All Data".to_string()], Series::new("dummy_cat".into(), &["All Data"]))
+		(
+			vec!["All Data".to_string()],
+			Series::new("dummy_cat".into(), &["All Data"]),
+		)
 	} else {
 		match df.column(cat_col) {
 			Ok(c) => {
-				let series = c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone());
+				let series = c
+					.unique()
+					.unwrap_or_else(|_| c.clone())
+					.sort(Default::default())
+					.unwrap_or_else(|_| c.clone());
 				let cats = series
 					.as_materialized_series()
 					.iter()
@@ -316,16 +335,25 @@ pub fn prepare_stacked_bar_data(
 					.collect();
 				(cats, series.as_materialized_series().clone())
 			}
-			Err(_) => (vec!["All Data".to_string()], Series::new("dummy_cat".into(), &["All Data"])),
+			Err(_) => (
+				vec!["All Data".to_string()],
+				Series::new("dummy_cat".into(), &["All Data"]),
+			),
 		}
 	};
-
 	let (group_names, groups_series) = if group_col.is_empty() {
-		(vec!["Value".to_string()], Series::new("dummy_group".into(), &["Value"]))
+		(
+			vec!["Value".to_string()],
+			Series::new("dummy_group".into(), &["Value"]),
+		)
 	} else {
 		match df.column(group_col) {
 			Ok(c) => {
-				let series = c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone());
+				let series = c
+					.unique()
+					.unwrap_or_else(|_| c.clone())
+					.sort(Default::default())
+					.unwrap_or_else(|_| c.clone());
 				let groups = series
 					.as_materialized_series()
 					.iter()
@@ -339,7 +367,10 @@ pub fn prepare_stacked_bar_data(
 					.collect();
 				(groups, series.as_materialized_series().clone())
 			}
-			Err(_) => (vec!["Value".to_string()], Series::new("dummy_group".into(), &["Value"])),
+			Err(_) => (
+				vec!["Value".to_string()],
+				Series::new("dummy_group".into(), &["Value"]),
+			),
 		}
 	};
 	let group_idx_map: HashMap<AnyValue, usize> = groups_series
@@ -354,26 +385,36 @@ pub fn prepare_stacked_bar_data(
 	let partitions = if cat_col.is_empty() {
 		vec![df.clone()]
 	} else {
-		df.partition_by([cat_col], true).unwrap_or_else(|_| vec![df.clone()])
+		df.partition_by([cat_col], true)
+			.unwrap_or_else(|_| vec![df.clone()])
 	};
 	for (i, group_df) in partitions.into_iter().enumerate() {
-		if i >= num_cats { break; }
+		if i >= num_cats {
+			break;
+		}
 		let group_partitions = if group_col.is_empty() {
 			vec![group_df]
 		} else {
-			group_df.partition_by([group_col], true).unwrap_or_else(|_| vec![group_df.clone()])
+			group_df
+				.partition_by([group_col], true)
+				.unwrap_or_else(|_| vec![group_df.clone()])
 		};
 		let mut current_cat_sum = 0.0f64;
 		for sub_group_df in group_partitions {
 			let group_idx = if group_col.is_empty() {
 				Some(0)
 			} else {
-				let group_val = sub_group_df.column(group_col).and_then(|c| c.get(0)).unwrap_or(AnyValue::Null);
+				let group_val = sub_group_df
+					.column(group_col)
+					.and_then(|c| c.get(0))
+					.unwrap_or(AnyValue::Null);
 				group_idx_map.get(&group_val).copied()
 			};
 
 			if let Some(group_idx) = group_idx {
-				if group_idx >= num_groups { continue; }
+				if group_idx >= num_groups {
+					continue;
+				}
 				let val = sub_group_df
 					.column(val_col)
 					.and_then(|c| c.cast(&DataType::Float64))

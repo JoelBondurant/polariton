@@ -1,6 +1,8 @@
-use crate::plot::common::{CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings};
+use crate::plot::common::{
+	CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -19,7 +21,7 @@ impl PlotKernel for ParallelPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -42,21 +44,28 @@ impl PlotKernel for ParallelPlotKernel {
 				width: 1.5,
 				..Default::default()
 			};
-			let path = Path::new(|builder| {
-				for (d, &val) in row_data.iter().enumerate() {
-					let (p, _) = transform.categorical(d, val);
-					if d == 0 {
-						builder.move_to(p);
-					} else {
-						builder.line_to(p);
+			backend.stroke_path(
+				&|builder| {
+					for (d, &val) in row_data.iter().enumerate() {
+						let (p, _) = transform.categorical(d, val);
+						if d == 0 {
+							builder.move_to(p);
+						} else {
+							builder.line_to(p);
+						}
 					}
-				}
-			});
-			frame.stroke(&path, stroke);
+				},
+				stroke,
+			);
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_cats = self.prepared_data.category_names.len();
 		if num_cats == 0 {
 			return;
@@ -72,7 +81,7 @@ impl PlotKernel for ParallelPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color {
@@ -91,12 +100,12 @@ impl PlotKernel for ParallelPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color,
 			);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.fill_text(iced::widget::canvas::Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -161,13 +170,14 @@ pub fn prepare_parallel_data(
 			num_categories: 1,
 		};
 	}
-
 	let num_dims = dims.len();
 	let mut ranges = Vec::with_capacity(num_dims);
 	let mut dim_columns = Vec::with_capacity(num_dims);
 	for dim in dims {
 		let col = match df.column(dim) {
-			Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(dim.into(), &DataType::Float64))),
+			Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| {
+				Column::from(Series::new_empty(dim.into(), &DataType::Float64))
+			}),
 			Err(_) => Column::from(Series::new_empty(dim.into(), &DataType::Float64)),
 		};
 		let series = col.f64().unwrap().clone();
@@ -180,7 +190,13 @@ pub fn prepare_parallel_data(
 		Series::new("dummy_cat".into(), &["All Data"])
 	} else {
 		match df.column(cat_col) {
-			Ok(c) => c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone()).as_materialized_series().clone(),
+			Ok(c) => c
+				.unique()
+				.unwrap_or_else(|_| c.clone())
+				.sort(Default::default())
+				.unwrap_or_else(|_| c.clone())
+				.as_materialized_series()
+				.clone(),
 			Err(_) => Series::new("dummy_cat".into(), &["All Data"]),
 		}
 	};

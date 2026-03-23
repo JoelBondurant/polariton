@@ -1,6 +1,9 @@
-use crate::plot::common::{AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings, format_label, polars_type_to_axis_type};
+use crate::plot::common::{
+	AxisType, CoordinateTransformer, PathBuilder, PlotBackend, PlotKernel, PlotLayout,
+	PlotSettings, format_label, polars_type_to_axis_type,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::collections::HashMap;
@@ -28,7 +31,7 @@ impl PlotKernel for StackedAreaPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -45,7 +48,7 @@ impl PlotKernel for StackedAreaPlotKernel {
 			for x_idx in 0..num_xs {
 				current_stacked_ys[x_idx] = prev_stacked_ys[x_idx] + self.prepared_data.category_values[cat_idx][x_idx];
 			}
-			let area_path = Path::new(|builder| {
+			let area_closure = |builder: &mut dyn PathBuilder| {
 				for (x_idx, csy) in current_stacked_ys.iter().enumerate() {
 					let p = transform.cartesian(self.prepared_data.unique_xs[x_idx], *csy);
 					if x_idx == 0 {
@@ -59,14 +62,14 @@ impl PlotKernel for StackedAreaPlotKernel {
 					builder.line_to(p);
 				}
 				builder.close();
-			});
-			frame.fill(&area_path, color);
+			};
+			backend.fill_path(&area_closure, color);
 			let stroke = Stroke {
 				style: Style::Solid(Color::from_rgba(0.0, 0.0, 0.0, 0.2)),
 				width: 0.5,
 				..Default::default()
 			};
-			frame.stroke(&area_path, stroke);
+			backend.stroke_path(&area_closure, stroke);
 			prev_stacked_ys.copy_from_slice(&current_stacked_ys);
 		}
 	}
@@ -106,7 +109,12 @@ impl PlotKernel for StackedAreaPlotKernel {
 		None
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_cats = self.prepared_data.categories.len();
 		if num_cats == 0 { return; }
 		let max_rows = settings.max_legend_rows.max(1) as usize;
@@ -120,7 +128,7 @@ impl PlotKernel for StackedAreaPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color { a: 0.6, ..settings.background_color }
@@ -132,12 +140,12 @@ impl PlotKernel for StackedAreaPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color
 			);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.fill_text(iced::widget::canvas::Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -184,12 +192,10 @@ pub fn prepare_stacked_area_data(df: &DataFrame, cat_col: &str, x_col: &str, y_c
 			y_label: y_col.to_string(),
 		};
 	}
-
 	let x_dtype = df.column(x_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let y_dtype = df.column(y_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let x_axis_type = polars_type_to_axis_type(&x_dtype);
 	let y_axis_type = polars_type_to_axis_type(&y_dtype);
-
 	let (categories, _categories_series) = if cat_col.is_empty() {
 		(vec!["All Data".to_string()], Series::new("dummy_cat".into(), &["All Data"]))
 	} else {
@@ -212,15 +218,12 @@ pub fn prepare_stacked_area_data(df: &DataFrame, cat_col: &str, x_col: &str, y_c
 			Err(_) => (vec!["All Data".to_string()], Series::new("dummy_cat".into(), &["All Data"])),
 		}
 	};
-
 	let unique_xs_series_res = df.column(x_col).and_then(|c| c.unique()).and_then(|c| c.sort(Default::default()));
 	let unique_xs_series = unique_xs_series_res.unwrap_or_else(|_| Series::new(x_col.into(), &[0.0, 1.0]).into());
 	let unique_xs_f64 = unique_xs_series.cast(&DataType::Float64).unwrap_or_else(|_| Series::new(x_col.into(), &[0.0, 1.0]).into());
 	let unique_xs: Vec<f64> = unique_xs_f64.f64().unwrap().into_no_null_iter().collect();
-	
 	let num_cats = categories.len();
 	let num_xs = unique_xs.len();
-	
 	if num_xs < 2 || num_cats == 0 {
 		return StackedAreaPreparedData {
 			categories,
@@ -234,7 +237,6 @@ pub fn prepare_stacked_area_data(df: &DataFrame, cat_col: &str, x_col: &str, y_c
 			y_label: y_col.to_string(),
 		};
 	}
-
 	let group_by_cols = if cat_col.is_empty() {
 		vec![col(x_col)]
 	} else {
@@ -244,7 +246,6 @@ pub fn prepare_stacked_area_data(df: &DataFrame, cat_col: &str, x_col: &str, y_c
 		.group_by(group_by_cols)
 		.agg([col(y_col).sum().alias("y_sum")])
 		.collect();
-	
 	let aggregated = match aggregated_res {
 		Ok(df) => df,
 		Err(_) => {
@@ -261,11 +262,9 @@ pub fn prepare_stacked_area_data(df: &DataFrame, cat_col: &str, x_col: &str, y_c
 			};
 		}
 	};
-
 	let mut category_values = vec![vec![0.0f64; num_xs]; num_cats];
 	let cat_to_idx: HashMap<String, usize> = categories.iter().enumerate().map(|(i, s)| (s.clone(), i)).collect();
 	let x_to_idx: HashMap<u64, usize> = unique_xs.iter().enumerate().map(|(i, &x)| (x.to_bits(), i)).collect();
-	
 	let binding_x = aggregated.column(x_col).map(|c| c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(x_col.into(), &DataType::Float64)))).unwrap_or_else(|_| Column::from(Series::new_empty(x_col.into(), &DataType::Float64)));
 	let p_x = binding_x.f64().unwrap();
 	let p_cat = if cat_col.is_empty() {
@@ -275,7 +274,6 @@ pub fn prepare_stacked_area_data(df: &DataFrame, cat_col: &str, x_col: &str, y_c
 	};
 	let binding_y = aggregated.column("y_sum").map(|c| c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty("y_sum".into(), &DataType::Float64)))).unwrap_or_else(|_| Column::from(Series::new_empty("y_sum".into(), &DataType::Float64)));
 	let p_y = binding_y.f64().unwrap();
-	
 	for i in 0..aggregated.height() {
 		let x = p_x.get(i).unwrap_or(0.0);
 		let cat_str = if let Some(p_cat) = &p_cat {

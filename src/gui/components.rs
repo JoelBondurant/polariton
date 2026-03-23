@@ -245,16 +245,23 @@ pub fn menu_bar<'a>() -> Element<'a, Message> {
 				handle_color: Color::TRANSPARENT,
 			})
 			.padding(8),
-		pick_list(&PlotType::ALL[..], None::<PlotType>, Message::AddPlot)
-			.placeholder("Plot")
-			.style(|_theme, _status| pick_list::Style {
-				background: Background::Color(colors::BG_SECONDARY),
-				border: border::Border::default(),
-				text_color: colors::TEXT_PRIMARY,
-				placeholder_color: colors::TEXT_PRIMARY,
-				handle_color: Color::TRANSPARENT,
-			})
-			.padding(8),
+		pick_list(
+			&crate::gui::messages::PlotAction::ALL[..],
+			None::<crate::gui::messages::PlotAction>,
+			|action| match action {
+				crate::gui::messages::PlotAction::Add(pt) => Message::AddPlot(pt),
+				crate::gui::messages::PlotAction::Export(fmt) => Message::Export(fmt),
+			},
+		)
+		.placeholder("Plot")
+		.style(|_theme, _status| pick_list::Style {
+			background: Background::Color(colors::BG_SECONDARY),
+			border: border::Border::default(),
+			text_color: colors::TEXT_PRIMARY,
+			placeholder_color: colors::TEXT_PRIMARY,
+			handle_color: Color::TRANSPARENT,
+		})
+		.padding(8),
 	]
 	.spacing(10)
 	.padding(2)

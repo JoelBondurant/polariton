@@ -1,6 +1,7 @@
-use crate::plot::common::{CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings};
+use crate::plot::common::{
+	CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path};
 use iced::{Color, Point, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -16,7 +17,7 @@ impl PlotKernel for RadialDialPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		bounds: Rectangle,
 		_transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -26,10 +27,7 @@ impl PlotKernel for RadialDialPlotKernel {
 		if num_cats == 0 {
 			return;
 		}
-		let center = Point::new(
-			bounds.width / 2.0,
-			bounds.height * 0.8,
-		);
+		let center = Point::new(bounds.width / 2.0, bounds.height * 0.8);
 		let max_radius = (bounds.width / 2.0).min(bounds.height * 0.7) * 1.0;
 		let ring_spacing = 5.0;
 		let total_spacing = (num_cats as f32 - 1.0) * ring_spacing;
@@ -50,63 +48,33 @@ impl PlotKernel for RadialDialPlotKernel {
 			let color = settings.color_theme.get_color(t);
 			let outer_r = max_radius - i as f32 * (ring_thickness + ring_spacing);
 			let inner_r = outer_r - ring_thickness;
-			let track_path = Path::new(|builder| {
-				let steps = 40;
-				for step in 0..=steps {
-					let angle = start_angle + (total_sweep * step as f32 / steps as f32);
-					let p = Point::new(
-						center.x + angle.cos() * outer_r,
-						center.y + angle.sin() * outer_r,
-					);
-					if step == 0 {
-						builder.move_to(p);
-					} else {
-						builder.line_to(p);
-					}
-				}
-				for step in (0..=steps).rev() {
-					let angle = start_angle + (total_sweep * step as f32 / steps as f32);
-					let p = Point::new(
-						center.x + angle.cos() * inner_r,
-						center.y + angle.sin() * inner_r,
-					);
-					builder.line_to(p);
-				}
-				builder.close();
-			});
-			frame.fill(&track_path, Color::from_rgba(0.5, 0.5, 0.5, 0.1));
-			if sweep > 0.001 {
-				let ring_path = Path::new(|builder| {
-					let steps = (sweep.abs() / total_sweep * 40.0).ceil() as usize;
-					let steps = steps.max(2);
-					for step in 0..=steps {
-						let angle = start_angle + (sweep * step as f32 / steps as f32);
-						let p = Point::new(
-							center.x + angle.cos() * outer_r,
-							center.y + angle.sin() * outer_r,
-						);
-						if step == 0 {
-							builder.move_to(p);
-						} else {
-							builder.line_to(p);
-						}
-					}
-					for step in (0..=steps).rev() {
-						let angle = start_angle + (sweep * step as f32 / steps as f32);
-						let p = Point::new(
-							center.x + angle.cos() * inner_r,
-							center.y + angle.sin() * inner_r,
-						);
-						builder.line_to(p);
-					}
+			backend.fill_path(
+				&|builder| {
+					builder.arc_to(center, outer_r, start_angle, start_angle + total_sweep);
+					builder.arc_to(center, inner_r, start_angle + total_sweep, start_angle);
 					builder.close();
-				});
-				frame.fill(&ring_path, color);
+				},
+				Color::from_rgba(0.5, 0.5, 0.5, 0.1),
+			);
+			if sweep > 0.001 {
+				backend.fill_path(
+					&|builder| {
+						builder.arc_to(center, outer_r, start_angle, start_angle + sweep);
+						builder.arc_to(center, inner_r, start_angle + sweep, start_angle);
+						builder.close();
+					},
+					color,
+				);
 			}
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_cats = self.prepared_data.categories.len();
 		if num_cats == 0 {
 			return;
@@ -122,7 +90,7 @@ impl PlotKernel for RadialDialPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color {
@@ -141,12 +109,12 @@ impl PlotKernel for RadialDialPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color,
 			);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.fill_text(iced::widget::canvas::Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -216,13 +184,19 @@ pub fn prepare_radial_dial_data(
 			max_values: vec![1.0],
 		};
 	}
-
 	let (categories, categories_series) = if cat_col.is_empty() {
-		(vec!["All Data".to_string()], Series::new("dummy_cat".into(), &["All Data"]))
+		(
+			vec!["All Data".to_string()],
+			Series::new("dummy_cat".into(), &["All Data"]),
+		)
 	} else {
 		match df.column(cat_col) {
 			Ok(c) => {
-				let series = c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone());
+				let series = c
+					.unique()
+					.unwrap_or_else(|_| c.clone())
+					.sort(Default::default())
+					.unwrap_or_else(|_| c.clone());
 				let cats = series
 					.as_materialized_series()
 					.iter()
@@ -236,7 +210,10 @@ pub fn prepare_radial_dial_data(
 					.collect();
 				(cats, series.as_materialized_series().clone())
 			}
-			Err(_) => (vec!["All Data".to_string()], Series::new("dummy_cat".into(), &["All Data"])),
+			Err(_) => (
+				vec!["All Data".to_string()],
+				Series::new("dummy_cat".into(), &["All Data"]),
+			),
 		}
 	};
 	let mut values = Vec::with_capacity(categories.len());
@@ -252,21 +229,15 @@ pub fn prepare_radial_dial_data(
 				AnyValue::Int64(i) => lit(i),
 				_ => lit(cat_val.to_string()),
 			};
-			df.clone()
-				.lazy()
-				.filter(col(cat_col).eq(lit_val))
-				.collect()
+			df.clone().lazy().filter(col(cat_col).eq(lit_val)).collect()
 		};
-		
 		let filtered = filtered_res.unwrap_or_else(|_| df.clone());
-		
 		let val = filtered
 			.column(val_col)
 			.ok()
 			.and_then(|c| c.cast(&DataType::Float64).ok())
 			.and_then(|c| c.f64().ok().map(|s| s.get(0).unwrap_or(0.0)))
 			.unwrap_or(0.0);
-			
 		let max_v = if max_val_col.is_empty() {
 			1.0
 		} else {

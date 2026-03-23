@@ -1,6 +1,8 @@
-use crate::plot::common::{AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings, format_label, polars_type_to_axis_type};
+use crate::plot::common::{
+	AxisType, CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout,
+	PlotSettings, format_label, polars_type_to_axis_type,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path};
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -27,7 +29,7 @@ impl PlotKernel for ScatterPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -35,19 +37,28 @@ impl PlotKernel for ScatterPlotKernel {
 	) {
 		for series in &self.prepared_data.series {
 			let color = settings.color_theme.get_color(series.color_t);
-			let path = Path::new(|builder| {
-				for p in &series.points {
-					let pixel_p = transform.cartesian(p[0], p[1]);
-					builder.circle(pixel_p, self.prepared_data.point_size_px);
-				}
-			});
-			frame.fill(&path, color);
+			backend.fill_path(
+				&|builder| {
+					for p in &series.points {
+						let pixel_p = transform.cartesian(p[0], p[1]);
+						builder.circle(pixel_p, self.prepared_data.point_size_px);
+					}
+				},
+				color,
+			);
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_series = self.prepared_data.series.len();
-		if num_series == 0 { return; }
+		if num_series == 0 {
+			return;
+		}
 		let max_rows = settings.max_legend_rows.max(1) as usize;
 		let num_cols = num_series.div_ceil(max_rows);
 		let actual_rows = num_series.min(max_rows);
@@ -59,10 +70,13 @@ impl PlotKernel for ScatterPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
-			Color { a: 0.6, ..settings.background_color }
+			Color {
+				a: 0.6,
+				..settings.background_color
+			},
 		);
 		for (i, series) in self.prepared_data.series.iter().enumerate() {
 			let color = settings.color_theme.get_color(series.color_t);
@@ -70,12 +84,16 @@ impl PlotKernel for ScatterPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			let dot_path = Path::circle(
-				iced::Point::new(item_x + swatch_size / 2.0, item_y + item_height / 2.0),
-				swatch_size / 2.0
+			backend.fill_path(
+				&|builder| {
+					builder.circle(
+						iced::Point::new(item_x + swatch_size / 2.0, item_y + item_height / 2.0),
+						swatch_size / 2.0,
+					);
+				},
+				color,
 			);
-			frame.fill(&dot_path, color);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.fill_text(iced::widget::canvas::Text {
 				content: series.name.clone(),
 				position: iced::Point::new(item_x + swatch_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -132,12 +150,10 @@ pub fn prepare_scatter_data(df: &DataFrame, cat_col: &str, x_col: &str, y_col: &
 		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(y_col.into(), &DataType::Float64))),
 		Err(_) => Column::from(Series::new_empty(y_col.into(), &DataType::Float64)),
 	};
-
 	let x_dtype = df.column(x_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let y_dtype = df.column(y_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let x_axis_type = polars_type_to_axis_type(&x_dtype);
 	let y_axis_type = polars_type_to_axis_type(&y_dtype);
-
 	let x_series = x_col_series.f64().unwrap();
 	let y_series = y_col_series.f64().unwrap();
 	let x_range = (x_series.min().unwrap_or(0.0), x_series.max().unwrap_or(1.0));
@@ -146,7 +162,6 @@ pub fn prepare_scatter_data(df: &DataFrame, cat_col: &str, x_col: &str, y_col: &
 	let y_pad = (y_range.1 - y_range.0).max(0.001) * 0.1;
 	let x_range = (x_range.0 - x_pad, x_range.1 + x_pad);
 	let y_range = (y_range.0 - y_pad, y_range.1 + y_pad);
-	
 	if df.height() == 0 || x_col.is_empty() || y_col.is_empty() {
 		return ScatterPreparedData {
 			series: vec![],
@@ -159,7 +174,6 @@ pub fn prepare_scatter_data(df: &DataFrame, cat_col: &str, x_col: &str, y_col: &
 			y_label: y_col.to_string(),
 		};
 	}
-
 	let partitions = if cat_col.is_empty() {
 		vec![df.clone()]
 	} else {
@@ -180,7 +194,6 @@ pub fn prepare_scatter_data(df: &DataFrame, cat_col: &str, x_col: &str, y_col: &
 				cat_val.to_string().replace("\"", "")
 			}
 		};
-		
 		let xs_col = match group_df.column(x_col) {
 			Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(x_col.into(), &DataType::Float64))),
 			Err(_) => Column::from(Series::new_empty(x_col.into(), &DataType::Float64)),
@@ -189,7 +202,6 @@ pub fn prepare_scatter_data(df: &DataFrame, cat_col: &str, x_col: &str, y_col: &
 			Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(y_col.into(), &DataType::Float64))),
 			Err(_) => Column::from(Series::new_empty(y_col.into(), &DataType::Float64)),
 		};
-		
 		let xs = xs_col.f64().unwrap();
 		let ys = ys_col.f64().unwrap();
 		let t = if num_partitions > 1 {

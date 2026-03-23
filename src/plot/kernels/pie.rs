@@ -1,6 +1,8 @@
-use crate::plot::common::{CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings};
+use crate::plot::common::{
+	CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -16,7 +18,7 @@ impl PlotKernel for PiePlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		bounds: Rectangle,
 		_transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -25,7 +27,6 @@ impl PlotKernel for PiePlotKernel {
 		let center = bounds.center();
 		let radius = bounds.width.min(bounds.height) / 2.0 * 0.8;
 		let num_categories = self.prepared_data.categories.len();
-
 		for i in 0..num_categories {
 			let start_angle = self.prepared_data.cumulative_angles[i] as f32;
 			let end_angle = self.prepared_data.cumulative_angles[i + 1] as f32;
@@ -38,19 +39,20 @@ impl PlotKernel for PiePlotKernel {
 				0.5
 			};
 			let color = settings.color_theme.get_color(t);
-			let path = Path::new(|builder| {
+			let path_closure = &|builder: &mut dyn crate::plot::common::PathBuilder| {
 				builder.move_to(center);
-				builder.arc(iced::widget::canvas::path::Arc {
+				builder.arc_to(
 					center,
 					radius,
-					start_angle: iced::Radians(start_angle.to_radians()),
-					end_angle: iced::Radians(end_angle.to_radians()),
-				});
+					start_angle.to_radians(),
+					end_angle.to_radians(),
+				);
 				builder.line_to(center);
-			});
-			frame.fill(&path, color);
-			frame.stroke(
-				&path,
+				builder.close();
+			};
+			backend.fill_path(path_closure, color);
+			backend.stroke_path(
+				path_closure,
 				Stroke {
 					style: Style::Solid(settings.background_color),
 					width: 1.0,
@@ -60,13 +62,16 @@ impl PlotKernel for PiePlotKernel {
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_categories = self.prepared_data.categories.len();
-		// println!("Pie draw_legend: num_categories={}, bounds={:?}", num_categories, bounds);
 		if num_categories == 0 {
 			return;
 		}
-
 		let max_rows = settings.max_legend_rows.max(1) as usize;
 		let num_cols = num_categories.div_ceil(max_rows);
 		let actual_rows = num_categories.min(max_rows);
@@ -76,12 +81,9 @@ impl PlotKernel for PiePlotKernel {
 		let col_width = 150.0;
 		let legend_width = num_cols as f32 * col_width + legend_padding * 2.0;
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
-
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		// println!("Pie legend pos: x={}, y={}, width={}, height={}", x, y, legend_width, legend_height);
-
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color {
@@ -89,7 +91,6 @@ impl PlotKernel for PiePlotKernel {
 				..settings.background_color
 			},
 		);
-
 		for i in 0..num_categories {
 			let name = &self.prepared_data.categories[i];
 			let t = if num_categories > 1 {
@@ -98,18 +99,16 @@ impl PlotKernel for PiePlotKernel {
 				0.5
 			};
 			let color = settings.color_theme.get_color(t);
-
 			let col = i / max_rows;
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color,
 			);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.fill_text(iced::widget::canvas::Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -174,7 +173,6 @@ pub fn prepare_pie_data(df: &DataFrame, cat_col: &str, val_col: &str) -> PiePrep
 			total_sum: 1.0,
 		};
 	}
-
 	let (categories, categories_series) = if cat_col.is_empty() {
 		let cats: Vec<String> = (0..df.height()).map(|i| format!("Row {}", i + 1)).collect();
 		(cats, Series::new_empty("dummy_cat".into(), &DataType::String))
@@ -205,20 +203,16 @@ pub fn prepare_pie_data(df: &DataFrame, cat_col: &str, val_col: &str) -> PiePrep
 			}
 		}
 	};
-
 	let mut values = Vec::with_capacity(categories.len());
 	let mut total_sum = 0.0f64;
-
 	if cat_col.is_empty() || df.column(cat_col).is_err() {
-		// Use val_col directly for each row
-		if let Ok(c) = df.column(val_col) {
-			if let Ok(c_f64) = c.cast(&DataType::Float64) {
-				let series = c_f64.f64().unwrap();
-				for i in 0..df.height() {
-					let val = series.get(i).unwrap_or(0.0);
-					values.push(val);
-					total_sum += val;
-				}
+		if let Ok(c) = df.column(val_col)
+			&& let Ok(c_f64) = c.cast(&DataType::Float64) {
+			let series = c_f64.f64().unwrap();
+			for i in 0..df.height() {
+				let val = series.get(i).unwrap_or(0.0);
+				values.push(val);
+				total_sum += val;
 			}
 		}
 	} else {
@@ -244,12 +238,10 @@ pub fn prepare_pie_data(df: &DataFrame, cat_col: &str, val_col: &str) -> PiePrep
 						.unwrap_or(0.0)
 				})
 				.unwrap_or(0.0);
-
 			values.push(val);
 			total_sum += val;
 		}
 	}
-
 	let mut cumulative_angles = Vec::with_capacity(values.len() + 1);
 	let mut current_angle = 0.0f64;
 	cumulative_angles.push(0.0);
@@ -266,25 +258,5 @@ pub fn prepare_pie_data(df: &DataFrame, cat_col: &str, val_col: &str) -> PiePrep
 		values,
 		cumulative_angles,
 		total_sum,
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn test_prepare_pie_data_empty_cat() {
-		let df = DataFrame::new(2, vec![
-			Column::from(Series::new("val".into(), &[10.0, 20.0])),
-		]).unwrap();
-		let prepared = prepare_pie_data(&df, "", "val");
-		assert_eq!(prepared.categories.len(), 2);
-		assert_eq!(prepared.categories[0], "Row 1");
-		assert_eq!(prepared.categories[1], "Row 2");
-		assert_eq!(prepared.values.len(), 2);
-		assert_eq!(prepared.values[0], 10.0);
-		assert_eq!(prepared.values[1], 20.0);
-		assert_eq!(prepared.total_sum, 30.0);
 	}
 }

@@ -1,6 +1,9 @@
-use crate::plot::common::{AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings, format_label, polars_type_to_axis_type};
+use crate::plot::common::{
+	format_label, polars_type_to_axis_type, AxisType, CoordinateTransformer,
+	PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Point, Rectangle, Size};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -27,20 +30,23 @@ impl PlotKernel for CandlestickPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
 		settings: PlotSettings,
 	) {
 		let n = self.prepared_data.x.len();
-		if n == 0 { return; }
+		if n == 0 {
+			return;
+		}
 		let x_delta = if n > 1 {
 			(self.prepared_data.x[1] - self.prepared_data.x[0]).abs()
 		} else {
 			1.0
 		};
-		let x_scale = transform.bounds.width as f64 / (self.prepared_data.x_range.1 - self.prepared_data.x_range.0);
+		let x_scale = transform.bounds.width as f64
+			/ (self.prepared_data.x_range.1 - self.prepared_data.x_range.0);
 		let candle_width = (x_scale * x_delta * 0.7).max(1.0) as f32;
 		let bullish_color = settings.color_theme.get_color(1.0);
 		let bearish_color = settings.color_theme.get_color(0.0);
@@ -55,36 +61,44 @@ impl PlotKernel for CandlestickPlotKernel {
 			let p_open = transform.cartesian(x, open);
 			let p_close = transform.cartesian(x, close);
 			let is_bullish = close >= open;
-			let color = if is_bullish { bullish_color } else { bearish_color };
-			let wick_path = Path::new(|builder| {
-				builder.move_to(p_low);
-				builder.line_to(p_high);
-			});
-			frame.stroke(&wick_path, Stroke {
-				style: Style::Solid(color),
-				width: 3.0,
-				..Default::default()
-			});
+			let color = if is_bullish {
+				bullish_color
+			} else {
+				bearish_color
+			};
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(p_low);
+					builder.line_to(p_high);
+				},
+				Stroke {
+					style: Style::Solid(color),
+					width: 3.0,
+					..Default::default()
+				},
+			);
 			let body_top = p_open.y.min(p_close.y);
 			let body_bottom = p_open.y.max(p_close.y);
 			let body_height = (body_bottom - body_top).max(1.0);
 			let body_x = p_open.x - candle_width / 2.0;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				Point::new(body_x, body_top),
 				Size::new(candle_width, body_height),
 				color,
 			);
-			let marks_path = Path::new(|builder| {
-				builder.move_to(Point::new(p_open.x - candle_width / 2.0, p_open.y));
-				builder.line_to(Point::new(p_open.x, p_open.y));
-				builder.move_to(Point::new(p_close.x, p_close.y));
-				builder.line_to(Point::new(p_close.x + candle_width / 2.0, p_close.y));
-			});
-			frame.stroke(&marks_path, Stroke {
-				style: Style::Solid(settings.decoration_color),
-				width: 2.0,
-				..Default::default()
-			});
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(Point::new(p_open.x - candle_width / 2.0, p_open.y));
+					builder.line_to(Point::new(p_open.x, p_open.y));
+					builder.move_to(Point::new(p_close.x, p_close.y));
+					builder.line_to(Point::new(p_close.x + candle_width / 2.0, p_close.y));
+				},
+				Stroke {
+					style: Style::Solid(settings.decoration_color),
+					width: 2.0,
+					..Default::default()
+				},
+			);
 		}
 	}
 
@@ -162,11 +176,9 @@ pub fn prepare_candlestick_data(
 			y_label: "Value".to_string(),
 		};
 	}
-
 	let x_dtype = df.column(x_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let x_axis_type = polars_type_to_axis_type(&x_dtype);
 	let y_axis_type = AxisType::Linear;
-
 	let x = match df.column(x_col) {
 		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(x_col.into(), &DataType::Float64))).as_materialized_series().f64().unwrap().into_no_null_iter().collect::<Vec<_>>(),
 		Err(_) => vec![],
@@ -195,15 +207,12 @@ pub fn prepare_candlestick_data(
 			Err(_) => vec![],
 		}
 	};
-
 	let x_min = x.iter().copied().fold(f64::INFINITY, f64::min);
 	let x_max = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 	let y_min = low.iter().copied().fold(f64::INFINITY, f64::min);
 	let y_max = high.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-
 	let (x_min, x_max) = if x_min.is_infinite() { (0.0, 1.0) } else { (x_min, x_max) };
 	let (y_min, y_max) = if y_min.is_infinite() { (0.0, 1.0) } else { (y_min, y_max) };
-
 	let x_pad = (x_max - x_min).max(0.1) * 0.05;
 	let y_pad = (y_max - y_min).max(0.1) * 0.05;
 	CandlestickPreparedData {

@@ -5,11 +5,69 @@ use crate::adapters::{
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::GridLineStyle;
 use crate::plot::core::PlotType;
-use iced::Color;
 use iced::{widget::pane_grid, window};
+use iced::{Color, Rectangle};
 use iced_code_editor::Message as EditorMessage;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+	SVG,
+	PNG,
+}
+
+impl std::fmt::Display for ExportFormat {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			ExportFormat::SVG => write!(f, "SVG"),
+			ExportFormat::PNG => write!(f, "PNG"),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlotAction {
+	Add(PlotType),
+	Export(ExportFormat),
+}
+
+impl std::fmt::Display for PlotAction {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			PlotAction::Add(pt) => write!(f, "New > {}", pt),
+			PlotAction::Export(fmt) => write!(f, "Export > {}", fmt),
+		}
+	}
+}
+
+impl PlotAction {
+	pub const ALL: [PlotAction; 22] = [
+		PlotAction::Add(PlotType::Bar),
+		PlotAction::Add(PlotType::BoxPlot),
+		PlotAction::Add(PlotType::Bubble),
+		PlotAction::Add(PlotType::Candlestick),
+		PlotAction::Add(PlotType::FillBetween),
+		PlotAction::Add(PlotType::Funnel),
+		PlotAction::Add(PlotType::Heatmap),
+		PlotAction::Add(PlotType::Hexbin),
+		PlotAction::Add(PlotType::Histogram),
+		PlotAction::Add(PlotType::HorizontalBar),
+		PlotAction::Add(PlotType::HorizontalStackedBar),
+		PlotAction::Add(PlotType::Line),
+		PlotAction::Add(PlotType::Parallel),
+		PlotAction::Add(PlotType::Pie),
+		PlotAction::Add(PlotType::Radar),
+		PlotAction::Add(PlotType::RadialDial),
+		PlotAction::Add(PlotType::Scatter),
+		PlotAction::Add(PlotType::StackedArea),
+		PlotAction::Add(PlotType::StackedBar),
+		PlotAction::Add(PlotType::Violin),
+		PlotAction::Export(ExportFormat::SVG),
+		PlotAction::Export(ExportFormat::PNG),
+	];
+}
 
 #[derive(Clone)]
 pub enum Message {
@@ -34,6 +92,8 @@ pub enum Message {
 	AddPlot(PlotType),
 	PlotEvent(pane_grid::Pane, PlotMessage),
 	ClosePlot(pane_grid::Pane),
+	Export(ExportFormat),
+	ExportWithWindowSize(ExportFormat, Option<iced::Size>),
 }
 
 #[allow(dead_code)]
@@ -41,6 +101,7 @@ pub enum Message {
 pub enum PlotMessage {
 	RefreshData,
 	UpdateHover(Option<String>),
+	UpdateBounds(Rectangle),
 	ChangePlotType(PlotType),
 	SetMaxLegendRows(u32),
 	SetLegendX(f32),

@@ -1,6 +1,8 @@
-use crate::plot::common::{CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings};
+use crate::plot::common::{
+	CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Color, Point, Rectangle, Size};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -19,7 +21,7 @@ impl PlotKernel for HeatmapPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -40,12 +42,15 @@ impl PlotKernel for HeatmapPlotKernel {
 				let (center, bw, bh) = transform.categorical_2d(i, j);
 				let rect_x = center.x - bw / 2.0;
 				let rect_y = center.y - bh / 2.0;
-				frame.fill_rectangle(Point::new(rect_x, rect_y), Size::new(bw, bh), color);
-				frame.stroke(
-					&iced::widget::canvas::Path::rectangle(
-						Point::new(rect_x, rect_y),
-						Size::new(bw, bh),
-					),
+				backend.fill_rectangle(Point::new(rect_x, rect_y), Size::new(bw, bh), color);
+				backend.stroke_path(
+					&|builder| {
+						builder.move_to(Point::new(rect_x, rect_y));
+						builder.line_to(Point::new(rect_x + bw, rect_y));
+						builder.line_to(Point::new(rect_x + bw, rect_y + bh));
+						builder.line_to(Point::new(rect_x, rect_y + bh));
+						builder.close();
+					},
 					Stroke {
 						style: Style::Solid(Color::from_rgba(0.0, 0.0, 0.0, 0.1)),
 						width: 1.0,
@@ -81,14 +86,19 @@ impl PlotKernel for HeatmapPlotKernel {
 		None
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let max_val = self.prepared_data.max_val;
 		let legend_width = 60.0;
 		let legend_height = 200.0;
 		let legend_padding = 10.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			Point::new(x, y),
 			Size::new(legend_width, legend_height),
 			Color {
@@ -106,17 +116,20 @@ impl PlotKernel for HeatmapPlotKernel {
 			let color = settings.color_theme.get_color(t);
 			let step_height = bar_height / steps as f32;
 			let step_y = bar_y + bar_height - (i as f32 + 1.0) * step_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				Point::new(bar_x, step_y),
 				iced::Size::new(bar_width, step_height + 0.5),
 				color,
 			);
 		}
-		frame.stroke(
-			&iced::widget::canvas::Path::rectangle(
-				Point::new(bar_x, bar_y),
-				Size::new(bar_width, bar_height),
-			),
+		backend.stroke_path(
+			&|builder| {
+				builder.move_to(Point::new(bar_x, bar_y));
+				builder.line_to(Point::new(bar_x + bar_width, bar_y));
+				builder.line_to(Point::new(bar_x + bar_width, bar_y + bar_height));
+				builder.line_to(Point::new(bar_x, bar_y + bar_height));
+				builder.close();
+			},
 			Stroke {
 				style: Style::Solid(settings.decoration_color),
 				width: 1.0,
@@ -124,7 +137,7 @@ impl PlotKernel for HeatmapPlotKernel {
 			},
 		);
 		let label_x = bar_x + bar_width + 5.0;
-		frame.fill_text(iced::widget::canvas::Text {
+		backend.fill_text(iced::widget::canvas::Text {
 			content: format!("{:.1}", max_val),
 			position: Point::new(label_x, bar_y),
 			color: settings.decoration_color,
@@ -132,7 +145,7 @@ impl PlotKernel for HeatmapPlotKernel {
 			align_y: iced::alignment::Vertical::Top,
 			..Default::default()
 		});
-		frame.fill_text(iced::widget::canvas::Text {
+		backend.fill_text(iced::widget::canvas::Text {
 			content: "0.0".to_string(),
 			position: Point::new(label_x, bar_y + bar_height),
 			color: settings.decoration_color,
@@ -176,12 +189,17 @@ pub fn prepare_heatmap_data(
 			y_label: y_col.to_string(),
 		};
 	}
-
 	let x_cats_series = if x_col.is_empty() {
 		Series::new("dummy_x".into(), &["X"])
 	} else {
 		match df.column(x_col) {
-			Ok(c) => c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone()).as_materialized_series().clone(),
+			Ok(c) => c
+				.unique()
+				.unwrap_or_else(|_| c.clone())
+				.sort(Default::default())
+				.unwrap_or_else(|_| c.clone())
+				.as_materialized_series()
+				.clone(),
 			Err(_) => Series::new("dummy_x".into(), &["X"]),
 		}
 	};
@@ -193,7 +211,13 @@ pub fn prepare_heatmap_data(
 		Series::new("dummy_y".into(), &["Y"])
 	} else {
 		match df.column(y_col) {
-			Ok(c) => c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone()).as_materialized_series().clone(),
+			Ok(c) => c
+				.unique()
+				.unwrap_or_else(|_| c.clone())
+				.sort(Default::default())
+				.unwrap_or_else(|_| c.clone())
+				.as_materialized_series()
+				.clone(),
 			Err(_) => Series::new("dummy_y".into(), &["Y"]),
 		}
 	};
@@ -201,7 +225,6 @@ pub fn prepare_heatmap_data(
 		.iter()
 		.map(|v: AnyValue| v.to_string().replace("\"", ""))
 		.collect();
-
 	let num_x = x_categories.len();
 	let num_y = y_categories.len();
 	let mut values = vec![vec![0.0f64; num_y]; num_x];
@@ -216,9 +239,10 @@ pub fn prepare_heatmap_data(
 		.enumerate()
 		.map(|(i, s): (usize, &String)| (s.clone(), i))
 		.collect();
-
 	let binding_val = match df.column(val_col) {
-		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(val_col.into(), &DataType::Float64))),
+		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| {
+			Column::from(Series::new_empty(val_col.into(), &DataType::Float64))
+		}),
 		Err(_) => Column::from(Series::new_empty(val_col.into(), &DataType::Float64)),
 	};
 	let p_val = binding_val.f64().unwrap();
@@ -239,8 +263,16 @@ pub fn prepare_heatmap_data(
 		}
 	};
 	for i in 0..df.height() {
-		let x_v = p_x.get(i).unwrap_or(AnyValue::Null).to_string().replace("\"", "");
-		let y_v = p_y.get(i).unwrap_or(AnyValue::Null).to_string().replace("\"", "");
+		let x_v = p_x
+			.get(i)
+			.unwrap_or(AnyValue::Null)
+			.to_string()
+			.replace("\"", "");
+		let y_v = p_y
+			.get(i)
+			.unwrap_or(AnyValue::Null)
+			.to_string()
+			.replace("\"", "");
 		let val = p_val.get(i).unwrap_or(0.0);
 		if let (Some(&xi), Some(&yi)) = (x_to_idx.get(&x_v), y_to_idx.get(&y_v)) {
 			values[xi][yi] = val;

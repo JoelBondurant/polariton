@@ -1,6 +1,9 @@
-use crate::plot::common::{AxisType, CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings, format_label, polars_type_to_axis_type};
+use crate::plot::common::{
+	format_label, polars_type_to_axis_type, AxisType, CoordinateTransformer,
+	PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style};
+use iced::widget::canvas::{Stroke, Style};
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -22,7 +25,7 @@ impl PlotKernel for BoxPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -34,7 +37,11 @@ impl PlotKernel for BoxPlotKernel {
 			let box_width = band_width * 0.6;
 			let left = center.x - box_width / 2.0;
 			let right = center.x + box_width / 2.0;
-			let t = if num_cats > 1 { i as f32 / (num_cats - 1) as f32 } else { 0.5 };
+			let t = if num_cats > 1 {
+				i as f32 / (num_cats - 1) as f32
+			} else {
+				0.5
+			};
 			let color = settings.color_theme.get_color(t);
 			let color_iced = color;
 			let line_color = settings.decoration_color;
@@ -46,25 +53,31 @@ impl PlotKernel for BoxPlotKernel {
 				width: box_width,
 				height: (q1_px.y - q3_px.y).abs().max(1.0),
 			};
-			frame.fill_rectangle(box_rect.position(), box_rect.size(), color_iced);
+			backend.fill_rectangle(box_rect.position(), box_rect.size(), color_iced);
 			let outline_stroke = Stroke {
 				style: Style::Solid(line_color),
 				width: 1.0,
 				..Default::default()
 			};
-			let box_path = Path::rectangle(box_rect.position(), box_rect.size());
-			frame.stroke(&box_path, outline_stroke);
+			backend.stroke_path(
+				&|builder| {
+					builder.rectangle(box_rect.position(), box_rect.size());
+				},
+				outline_stroke,
+			);
 			let (median_px, _) = transform.categorical(i, stats.median);
 			let median_stroke = Stroke {
 				style: Style::Solid(line_color),
 				width: 3.5,
 				..Default::default()
 			};
-			let median_path = Path::new(|builder| {
-				builder.move_to(iced::Point::new(left, median_px.y));
-				builder.line_to(iced::Point::new(right, median_px.y));
-			});
-			frame.stroke(&median_path, median_stroke);
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(iced::Point::new(left, median_px.y));
+					builder.line_to(iced::Point::new(right, median_px.y));
+				},
+				median_stroke,
+			);
 			let whisker_stroke = Stroke {
 				style: Style::Solid(line_color),
 				width: 1.0,
@@ -72,26 +85,30 @@ impl PlotKernel for BoxPlotKernel {
 			};
 			let (min_px, _) = transform.categorical(i, stats.min);
 			let (max_px, _) = transform.categorical(i, stats.max);
-			let whiskers_path = Path::new(|builder| {
-				builder.move_to(iced::Point::new(center.x, min_px.y));
-				builder.line_to(iced::Point::new(center.x, q1_px.y));
-				builder.move_to(iced::Point::new(center.x, q3_px.y));
-				builder.line_to(iced::Point::new(center.x, max_px.y));
-			});
-			frame.stroke(&whiskers_path, whisker_stroke);
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(iced::Point::new(center.x, min_px.y));
+					builder.line_to(iced::Point::new(center.x, q1_px.y));
+					builder.move_to(iced::Point::new(center.x, q3_px.y));
+					builder.line_to(iced::Point::new(center.x, max_px.y));
+				},
+				whisker_stroke,
+			);
 			let cap_width = box_width * 0.4;
 			let cap_stroke = Stroke {
 				style: Style::Solid(line_color),
 				width: 3.5,
 				..Default::default()
 			};
-			let caps_path = Path::new(|builder| {
-				builder.move_to(iced::Point::new(center.x - cap_width / 2.0, min_px.y));
-				builder.line_to(iced::Point::new(center.x + cap_width / 2.0, min_px.y));
-				builder.move_to(iced::Point::new(center.x - cap_width / 2.0, max_px.y));
-				builder.line_to(iced::Point::new(center.x + cap_width / 2.0, max_px.y));
-			});
-			frame.stroke(&caps_path, cap_stroke);
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(iced::Point::new(center.x - cap_width / 2.0, min_px.y));
+					builder.line_to(iced::Point::new(center.x + cap_width / 2.0, min_px.y));
+					builder.move_to(iced::Point::new(center.x - cap_width / 2.0, max_px.y));
+					builder.line_to(iced::Point::new(center.x + cap_width / 2.0, max_px.y));
+				},
+				cap_stroke,
+			);
 		}
 	}
 
@@ -100,7 +117,8 @@ impl PlotKernel for BoxPlotKernel {
 			&& let PlotLayout::CategoricalX {
 				categories,
 				y_range,
-			} = transform.layout {
+			} = transform.layout
+		{
 			for (i, category) in categories.iter().enumerate() {
 				let (center, band_width) = transform.categorical(i, 0.0);
 				let left = center.x - band_width / 2.0;
@@ -109,8 +127,7 @@ impl PlotKernel for BoxPlotKernel {
 					let stats = &self.prepared_data.stats[i];
 					let y_scale = transform.bounds.height as f64 / (y_range.1 - y_range.0);
 					let data_y = y_range.0
-						+ (transform.bounds.height - cursor_pos.y) as f64
-							/ y_scale;
+						+ (transform.bounds.height - cursor_pos.y) as f64 / y_scale;
 					if data_y >= stats.min && data_y <= stats.max {
 						let yt = self.prepared_data.y_axis_type;
 						return Some(format!(
@@ -129,9 +146,16 @@ impl PlotKernel for BoxPlotKernel {
 		None
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_cats = self.prepared_data.categories.len();
-		if num_cats == 0 { return; }
+		if num_cats == 0 {
+			return;
+		}
 		let max_rows = settings.max_legend_rows.max(1) as usize;
 		let num_cols = num_cats.div_ceil(max_rows);
 		let actual_rows = num_cats.min(max_rows);
@@ -143,24 +167,31 @@ impl PlotKernel for BoxPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
-			Color { a: 0.6, ..settings.background_color }
+			Color {
+				a: 0.6,
+				..settings.background_color
+			},
 		);
 		for (i, name) in self.prepared_data.categories.iter().enumerate() {
-			let t = if num_cats > 1 { i as f32 / (num_cats - 1) as f32 } else { 0.5 };
+			let t = if num_cats > 1 {
+				i as f32 / (num_cats - 1) as f32
+			} else {
+				0.5
+			};
 			let color = settings.color_theme.get_color(t);
 			let col = i / max_rows;
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
-				color
+				color,
 			);
-			frame.fill_text(iced::widget::canvas::Text {
+			backend.fill_text(iced::widget::canvas::Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -219,10 +250,8 @@ pub fn prepare_box_plot_data(
 			y_label: val_col.to_string(),
 		};
 	}
-
 	let y_dtype = df.column(val_col).map(|c| c.dtype().clone()).unwrap_or(DataType::Float64);
 	let y_axis_type = polars_type_to_axis_type(&y_dtype);
-
 	let (categories, categories_series) = if cat_col.is_empty() {
 		(vec!["All Data".to_string()], Series::new("dummy".into(), &["All Data"]))
 	} else {
@@ -245,7 +274,6 @@ pub fn prepare_box_plot_data(
 			Err(_) => (vec!["All Data".to_string()], Series::new("dummy".into(), &["All Data"])),
 		}
 	};
-
 	let num_cats = categories.len();
 	let mut stats = Vec::with_capacity(num_cats);
 	let mut y_min_all = f64::MAX;

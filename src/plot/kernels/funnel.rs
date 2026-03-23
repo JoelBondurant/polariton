@@ -1,6 +1,8 @@
-use crate::plot::common::{CoordinateTransformer, PlotKernel, PlotLayout, PlotSettings};
+use crate::plot::common::{
+	CoordinateTransformer, PlotBackend, PlotKernel, PlotLayout, PlotSettings,
+};
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Path, Stroke, Style, Text};
+use iced::widget::canvas::{Stroke, Style, Text};
 use iced::{Color, Pixels, Point, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -24,7 +26,7 @@ impl PlotKernel for FunnelPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		bounds: Rectangle,
 		_transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -46,7 +48,6 @@ impl PlotKernel for FunnelPlotKernel {
 			let width = (val / self.prepared_data.total_max) * bounds.width * 0.8;
 			let next_width = (next_val / self.prepared_data.total_max) * bounds.width * 0.8;
 			let y_top = i as f32 * stage_height;
-
 			let y_bottom = y_top + stage_height;
 			let t = if num_stages > 1 {
 				i as f32 / (num_stages - 1) as f32
@@ -54,16 +55,16 @@ impl PlotKernel for FunnelPlotKernel {
 				0.5
 			};
 			let color = settings.color_theme.get_color(t);
-			let trapezoid = Path::new(|builder| {
+			let trapezoid_path = &|builder: &mut dyn crate::plot::common::PathBuilder| {
 				builder.move_to(Point::new(center_x - width / 2.0, y_top));
 				builder.line_to(Point::new(center_x + width / 2.0, y_top));
 				builder.line_to(Point::new(center_x + next_width / 2.0, y_bottom));
 				builder.line_to(Point::new(center_x - next_width / 2.0, y_bottom));
 				builder.close();
-			});
-			frame.fill(&trapezoid, color);
-			frame.stroke(
-				&trapezoid,
+			};
+			backend.fill_path(trapezoid_path, color);
+			backend.stroke_path(
+				trapezoid_path,
 				Stroke {
 					style: Style::Solid(Color {
 						a: 0.2,
@@ -73,7 +74,7 @@ impl PlotKernel for FunnelPlotKernel {
 					..Default::default()
 				},
 			);
-			frame.fill_text(Text {
+			backend.fill_text(Text {
 				content: format!("{:.0}", val),
 				position: Point::new(center_x, y_top + stage_height / 2.0),
 				color: settings.decoration_color,
@@ -85,7 +86,12 @@ impl PlotKernel for FunnelPlotKernel {
 		}
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_cats = self.prepared_data.stages.len();
 		if num_cats == 0 {
 			return;
@@ -101,7 +107,7 @@ impl PlotKernel for FunnelPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color {
@@ -120,12 +126,12 @@ impl PlotKernel for FunnelPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color,
 			);
-			frame.fill_text(Text {
+			backend.fill_text(Text {
 				content: name.clone(),
 				position: Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -199,17 +205,28 @@ pub fn prepare_funnel_data(df: &DataFrame, stage_col: &str, val_col: &str) -> Fu
 			y_label: stage_col.to_string(),
 		};
 	}
-
 	let stages_series = if stage_col.is_empty() {
-		Series::new("dummy_stage".into(), (0..df.height()).map(|i| format!("Stage {}", i)).collect::<Vec<_>>())
+		Series::new(
+			"dummy_stage".into(),
+			(0..df.height())
+				.map(|i| format!("Stage {}", i))
+				.collect::<Vec<_>>(),
+		)
 	} else {
 		match df.column(stage_col) {
 			Ok(c) => c.as_materialized_series().clone(),
-			Err(_) => Series::new("dummy_stage".into(), (0..df.height()).map(|i| format!("Stage {}", i)).collect::<Vec<_>>()),
+			Err(_) => Series::new(
+				"dummy_stage".into(),
+				(0..df.height())
+					.map(|i| format!("Stage {}", i))
+					.collect::<Vec<_>>(),
+			),
 		}
 	};
 	let values_series = match df.column(val_col) {
-		Ok(c) => c.cast(&DataType::Float32).unwrap_or_else(|_| Column::from(Series::new_empty(val_col.into(), &DataType::Float32))),
+		Ok(c) => c.cast(&DataType::Float32).unwrap_or_else(|_| {
+			Column::from(Series::new_empty(val_col.into(), &DataType::Float32))
+		}),
 		Err(_) => Column::from(Series::new_empty(val_col.into(), &DataType::Float32)),
 	};
 	let stages: Vec<String> = stages_series

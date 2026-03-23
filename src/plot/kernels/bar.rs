@@ -1,8 +1,8 @@
 use crate::plot::common::{
-	CoordinateTransformer, Orientation, PlotKernel, PlotLayout, PlotSettings,
+	CoordinateTransformer, Orientation, PlotBackend, PlotKernel, PlotLayout, PlotSettings,
 };
 use iced::advanced::mouse::Cursor;
-use iced::widget::canvas::{Frame, Text};
+use iced::widget::canvas::Text;
 use iced::{Color, Rectangle};
 use polars::prelude::*;
 use std::sync::Arc;
@@ -34,7 +34,7 @@ impl PlotKernel for BarPlotKernel {
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		_cursor: Cursor,
@@ -44,21 +44,25 @@ impl PlotKernel for BarPlotKernel {
 		let num_groups = self.prepared_data.group_names.len();
 		match self.orientation {
 			Orientation::Vertical => {
+				let y_base = if let PlotLayout::CategoricalX { y_range, .. } = transform.layout {
+					y_range.0
+				} else {
+					0.0
+				};
 				let total_band_width = transform.bounds.width / num_cats as f32;
 				let group_area_width = total_band_width * 0.8;
 				let group_area_offset = (total_band_width - group_area_width) / 2.0;
 				let sub_group_width = group_area_width / num_groups as f32;
 				let bar_padding = sub_group_width * 0.05;
 				for i in 0..num_cats {
-					let cat_left =
-						(i as f32 * total_band_width) + group_area_offset;
+					let cat_left = (i as f32 * total_band_width) + group_area_offset;
 					for j in 0..num_groups {
 						let val = self.prepared_data.values[i][j];
-						if val <= 0.0 {
+						if val <= y_base {
 							continue;
 						}
 						let (p_top, _) = transform.categorical(i, val);
-						let (p_bottom, _) = transform.categorical(i, 0.0);
+						let (p_bottom, _) = transform.categorical(i, y_base);
 						let x_start = cat_left + (j as f32 * sub_group_width) + bar_padding;
 						let x_end = cat_left + ((j + 1) as f32 * sub_group_width) - bar_padding;
 						let bar_rect = Rectangle {
@@ -73,26 +77,30 @@ impl PlotKernel for BarPlotKernel {
 							0.5
 						};
 						let color = settings.color_theme.get_color(t);
-						frame.fill_rectangle(bar_rect.position(), bar_rect.size(), color);
+						backend.fill_rectangle(bar_rect.position(), bar_rect.size(), color);
 					}
 				}
 			}
 			Orientation::Horizontal => {
+				let x_base = if let PlotLayout::CategoricalY { x_range, .. } = transform.layout {
+					x_range.0
+				} else {
+					0.0
+				};
 				let total_band_height = transform.bounds.height / num_cats as f32;
 				let group_area_height = total_band_height * 0.8;
 				let group_area_offset = (total_band_height - group_area_height) / 2.0;
 				let sub_group_height = group_area_height / num_groups as f32;
 				let bar_padding = sub_group_height * 0.05;
 				for i in 0..num_cats {
-					let cat_top = (num_cats - 1 - i) as f32 * total_band_height
-						+ group_area_offset;
+					let cat_top = (num_cats - 1 - i) as f32 * total_band_height + group_area_offset;
 					for j in 0..num_groups {
 						let val = self.prepared_data.values[i][j];
-						if val <= 0.0 {
+						if val <= x_base {
 							continue;
 						}
 						let (p_right, _) = transform.categorical(i, val);
-						let (p_left, _) = transform.categorical(i, 0.0);
+						let (p_left, _) = transform.categorical(i, x_base);
 						let y_start =
 							cat_top + (num_groups - 1 - j) as f32 * sub_group_height + bar_padding;
 						let y_end =
@@ -109,7 +117,7 @@ impl PlotKernel for BarPlotKernel {
 							0.5
 						};
 						let color = settings.color_theme.get_color(t);
-						frame.fill_rectangle(bar_rect.position(), bar_rect.size(), color);
+						backend.fill_rectangle(bar_rect.position(), bar_rect.size(), color);
 					}
 				}
 			}
@@ -143,8 +151,7 @@ impl PlotKernel for BarPlotKernel {
 									let y_scale =
 										transform.bounds.height as f64 / (y_range.1 - y_range.0);
 									let data_y = y_range.0
-										+ (transform.bounds.height
-											- cursor_pos.y) as f64 / y_scale;
+										+ (transform.bounds.height - cursor_pos.y) as f64 / y_scale;
 									let group_name = &self.prepared_data.group_names[group_idx];
 									return Some(format!(
 										"{}: {} (Value: ~{:.2})",
@@ -179,8 +186,7 @@ impl PlotKernel for BarPlotKernel {
 										.min(num_groups - 1);
 									let x_scale =
 										transform.bounds.width as f64 / (x_range.1 - x_range.0);
-									let data_x = x_range.0
-										+ cursor_pos.x as f64 / x_scale;
+									let data_x = x_range.0 + cursor_pos.x as f64 / x_scale;
 									let group_name = &self.prepared_data.group_names[group_idx];
 									return Some(format!(
 										"{}: {} (Value: ~{:.2})",
@@ -196,7 +202,12 @@ impl PlotKernel for BarPlotKernel {
 		None
 	}
 
-	fn draw_legend(&self, frame: &mut Frame, bounds: Rectangle, settings: PlotSettings) {
+	fn draw_legend(
+		&self,
+		backend: &mut dyn PlotBackend,
+		bounds: Rectangle,
+		settings: PlotSettings,
+	) {
 		let num_groups = self.prepared_data.group_names.len();
 		if num_groups == 0 {
 			return;
@@ -212,7 +223,7 @@ impl PlotKernel for BarPlotKernel {
 		let legend_height = actual_rows as f32 * item_height + legend_padding * 2.0;
 		let x = (bounds.width - legend_width) * settings.legend_x;
 		let y = (bounds.height - legend_height) * settings.legend_y;
-		frame.fill_rectangle(
+		backend.fill_rectangle(
 			iced::Point::new(x, y),
 			iced::Size::new(legend_width, legend_height),
 			Color {
@@ -231,12 +242,12 @@ impl PlotKernel for BarPlotKernel {
 			let row = i % max_rows;
 			let item_x = x + legend_padding + col as f32 * col_width;
 			let item_y = y + legend_padding + row as f32 * item_height;
-			frame.fill_rectangle(
+			backend.fill_rectangle(
 				iced::Point::new(item_x, item_y + (item_height - rect_size) / 2.0),
 				iced::Size::new(rect_size, rect_size),
 				color,
 			);
-			frame.fill_text(Text {
+			backend.fill_text(Text {
 				content: name.clone(),
 				position: iced::Point::new(item_x + rect_size + 10.0, item_y + item_height / 2.0),
 				color: settings.decoration_color,
@@ -288,13 +299,19 @@ pub fn prepare_bar_data(
 			y_label: val_col.to_string(),
 		};
 	}
-
 	let (categories, _categories_series) = if cat_col.is_empty() {
-		(vec!["All Data".to_string()], Series::new("dummy_cat".into(), &["All Data"]))
+		(
+			vec!["All Data".to_string()],
+			Series::new("dummy_cat".into(), &["All Data"]),
+		)
 	} else {
 		match df.column(cat_col) {
 			Ok(c) => {
-				let series = c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone());
+				let series = c
+					.unique()
+					.unwrap_or_else(|_| c.clone())
+					.sort(Default::default())
+					.unwrap_or_else(|_| c.clone());
 				let cats = series
 					.as_materialized_series()
 					.iter()
@@ -308,16 +325,25 @@ pub fn prepare_bar_data(
 					.collect();
 				(cats, series.as_materialized_series().clone())
 			}
-			Err(_) => (vec!["All Data".to_string()], Series::new("dummy_cat".into(), &["All Data"])),
+			Err(_) => (
+				vec!["All Data".to_string()],
+				Series::new("dummy_cat".into(), &["All Data"]),
+			),
 		}
 	};
-
 	let (group_names, groups_series) = if group_col.is_empty() {
-		(vec!["Value".to_string()], Series::new("dummy_group".into(), &["Value"]))
+		(
+			vec!["Value".to_string()],
+			Series::new("dummy_group".into(), &["Value"]),
+		)
 	} else {
 		match df.column(group_col) {
 			Ok(c) => {
-				let series = c.unique().unwrap_or_else(|_| c.clone()).sort(Default::default()).unwrap_or_else(|_| c.clone());
+				let series = c
+					.unique()
+					.unwrap_or_else(|_| c.clone())
+					.sort(Default::default())
+					.unwrap_or_else(|_| c.clone());
 				let groups = series
 					.as_materialized_series()
 					.iter()
@@ -331,14 +357,18 @@ pub fn prepare_bar_data(
 					.collect();
 				(groups, series.as_materialized_series().clone())
 			}
-			Err(_) => (vec!["Value".to_string()], Series::new("dummy_group".into(), &["Value"])),
+			Err(_) => (
+				vec!["Value".to_string()],
+				Series::new("dummy_group".into(), &["Value"]),
+			),
 		}
 	};
 	let num_cats = categories.len();
 	let num_groups = group_names.len();
-	
 	let vals_col_series = match df.column(val_col) {
-		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| Column::from(Series::new_empty(val_col.into(), &DataType::Float64))),
+		Ok(c) => c.cast(&DataType::Float64).unwrap_or_else(|_| {
+			Column::from(Series::new_empty(val_col.into(), &DataType::Float64))
+		}),
 		Err(_) => Column::from(Series::new_empty(val_col.into(), &DataType::Float64)),
 	};
 	let vals_f64 = vals_col_series.f64().unwrap();
@@ -346,30 +376,36 @@ pub fn prepare_bar_data(
 	let y_min = 0.0f64;
 	let y_range = (y_min, y_max * 1.1);
 	let mut values = vec![vec![0.0f64; num_groups]; num_cats];
-	
 	let partitions = if cat_col.is_empty() {
 		vec![df.clone()]
 	} else {
-		df.partition_by([cat_col], true).unwrap_or_else(|_| vec![df.clone()])
+		df.partition_by([cat_col], true)
+			.unwrap_or_else(|_| vec![df.clone()])
 	};
 	for (i, group_df) in partitions.into_iter().enumerate() {
-		if i >= num_cats { break; }
+		if i >= num_cats {
+			break;
+		}
 		let group_partitions = if group_col.is_empty() {
 			vec![group_df]
 		} else {
-			group_df.partition_by([group_col], true).unwrap_or_else(|_| vec![group_df.clone()])
+			group_df
+				.partition_by([group_col], true)
+				.unwrap_or_else(|_| vec![group_df.clone()])
 		};
 		for sub_group_df in group_partitions {
 			let g_idx = if group_col.is_empty() {
 				0
 			} else {
-				let g_val = sub_group_df.column(group_col).and_then(|c| c.get(0)).unwrap_or(AnyValue::Null);
-				groups_series
-					.iter()
-					.position(|v| v == g_val)
-					.unwrap_or(0)
+				let g_val = sub_group_df
+					.column(group_col)
+					.and_then(|c| c.get(0))
+					.unwrap_or(AnyValue::Null);
+				groups_series.iter().position(|v| v == g_val).unwrap_or(0)
 			};
-			if g_idx >= num_groups { continue; }
+			if g_idx >= num_groups {
+				continue;
+			}
 			let val = sub_group_df
 				.column(val_col)
 				.and_then(|c| c.cast(&DataType::Float64))

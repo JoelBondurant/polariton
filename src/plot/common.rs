@@ -155,11 +155,6 @@ impl<'a> CoordinateTransformer<'a> {
 			x_range, y_range, ..
 		} = self.layout
 		{
-			// Adjust cursor position to be relative to the plot area origin (0,0)
-			// since the transform methods now assume (0,0) is the top-left of the bounds.
-			// However, cursor_pos is already relative to the plot area if the frame was translated.
-			// Wait, the prompt says cursor_pos is relative to widget top-left.
-			// If we replaced transform.bounds.x with 0.0 in kernels, we should do same here.
 			let x_delta = (x_range.1 - x_range.0).abs().max(f64::EPSILON);
 			let y_delta = (y_range.1 - y_range.0).abs().max(f64::EPSILON);
 			let x_scale = x_delta / self.bounds.width as f64;
@@ -304,19 +299,106 @@ impl Default for PlotSettings {
 	}
 }
 
+pub trait PathBuilder {
+	fn move_to(&mut self, point: Point);
+	fn line_to(&mut self, point: Point);
+	fn arc_to(&mut self, center: Point, radius: f32, start_angle: f32, end_angle: f32);
+	fn circle(&mut self, center: Point, radius: f32);
+	fn rectangle(&mut self, top_left: Point, size: iced::Size);
+	fn close(&mut self);
+}
+
+pub trait PlotBackend {
+	fn stroke_path(&mut self, f: &dyn Fn(&mut dyn PathBuilder), stroke: Stroke);
+	fn fill_path(&mut self, f: &dyn Fn(&mut dyn PathBuilder), color: Color);
+	fn fill_rectangle(&mut self, top_left: Point, size: iced::Size, color: Color);
+	fn fill_text(&mut self, text: Text);
+	fn translate(&mut self, translation: iced::Vector);
+	fn rotate(&mut self, angle: f32);
+	fn with_save(&mut self, f: &mut dyn FnMut(&mut dyn PlotBackend));
+	fn with_clip(&mut self, bounds: Rectangle, f: &mut dyn FnMut(&mut dyn PlotBackend));
+}
+
+pub struct IcedBackend<'a> {
+	pub frame: &'a mut Frame,
+}
+
+struct IcedPathBuilder<'a> {
+	builder: &'a mut canvas::path::Builder,
+}
+
+impl<'a> PathBuilder for IcedPathBuilder<'a> {
+	fn move_to(&mut self, point: Point) { self.builder.move_to(point); }
+	fn line_to(&mut self, point: Point) { self.builder.line_to(point); }
+	fn arc_to(&mut self, center: Point, radius: f32, start: f32, end: f32) { 
+		self.builder.arc(canvas::path::Arc { 
+			center, 
+			radius, 
+			start_angle: iced::Radians(start), 
+			end_angle: iced::Radians(end) 
+		}); 
+	}
+	fn circle(&mut self, center: Point, radius: f32) { self.builder.circle(center, radius); }
+	fn rectangle(&mut self, top_left: Point, size: iced::Size) { self.builder.rectangle(top_left, size); }
+	fn close(&mut self) { self.builder.close(); }
+}
+
+impl<'a> PlotBackend for IcedBackend<'a> {
+	fn stroke_path(&mut self, f: &dyn Fn(&mut dyn PathBuilder), stroke: Stroke) {
+		let path = Path::new(|builder| {
+			let mut ipb = IcedPathBuilder { builder };
+			f(&mut ipb);
+		});
+		self.frame.stroke(&path, stroke);
+	}
+	fn fill_path(&mut self, f: &dyn Fn(&mut dyn PathBuilder), color: Color) {
+		let path = Path::new(|builder| {
+			let mut ipb = IcedPathBuilder { builder };
+			f(&mut ipb);
+		});
+		self.frame.fill(&path, color);
+	}
+	fn fill_rectangle(&mut self, top_left: Point, size: iced::Size, color: Color) {
+		self.fill_path(&|builder| {
+			builder.rectangle(top_left, size);
+		}, color);
+	}
+	fn fill_text(&mut self, text: Text) {
+		self.frame.fill_text(text);
+	}
+	fn translate(&mut self, translation: iced::Vector) {
+		self.frame.translate(translation);
+	}
+	fn rotate(&mut self, angle: f32) {
+		self.frame.rotate(angle);
+	}
+	fn with_save(&mut self, f: &mut dyn FnMut(&mut dyn PlotBackend)) {
+		self.frame.with_save(|frame| {
+			let mut backend = IcedBackend { frame };
+			f(&mut backend);
+		});
+	}
+	fn with_clip(&mut self, bounds: Rectangle, f: &mut dyn FnMut(&mut dyn PlotBackend)) {
+		self.frame.with_clip(bounds, |frame| {
+			let mut backend = IcedBackend { frame };
+			f(&mut backend);
+		});
+	}
+}
+
 pub trait PlotKernel {
 	fn layout(&self, settings: PlotSettings) -> PlotLayout;
 
 	fn plot(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		bounds: Rectangle,
 		transform: &CoordinateTransformer,
 		cursor: Cursor,
 		settings: PlotSettings,
 	);
 
-	fn draw_legend(&self, _frame: &mut Frame, _bounds: Rectangle, _settings: PlotSettings) {}
+	fn draw_legend(&self, _backend: &mut dyn PlotBackend, _bounds: Rectangle, _settings: PlotSettings) {}
 
 	fn hover(&self, transform: &CoordinateTransformer, cursor: Cursor) -> Option<String>;
 
@@ -336,18 +418,9 @@ pub struct PlotWidget<'a> {
 	pub settings: PlotSettings,
 }
 
-impl<'a> Program<PlotMessage> for PlotWidget<'a> {
-	type State = Option<std::time::Instant>;
-
-	fn draw(
-		&self,
-		_state: &Self::State,
-		renderer: &Renderer,
-		_theme: &Theme,
-		bounds: Rectangle,
-		cursor: Cursor,
-	) -> Vec<Geometry> {
-		let mut frame = Frame::new(renderer, bounds.size());
+impl<'a> PlotWidget<'a> {
+	pub fn render(&self, backend: &mut dyn PlotBackend, bounds: Rectangle) {
+		backend.fill_rectangle(Point::ORIGIN, bounds.size(), self.settings.background_color);
 		let padding_top = self.padding + self.settings.plot_padding_top;
 		let padding_bottom = self.padding + self.settings.plot_padding_bottom;
 		let padding_left = self.padding + self.settings.plot_padding_left;
@@ -360,66 +433,77 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 		};
 		let layout = self.kernel.layout(self.settings.clone());
 		let transform = CoordinateTransformer::new(&layout, plot_area);
-		let relative_cursor = match cursor.position() {
-			Some(pos) => Cursor::Available(Point::new(pos.x - bounds.x, pos.y - bounds.y)),
-			None => Cursor::Unavailable,
-		};
-		let plot_cursor = match relative_cursor.position() {
-			Some(pos) => Cursor::Available(Point::new(pos.x - plot_area.x, pos.y - plot_area.y)),
-			None => Cursor::Unavailable,
-		};
-		frame.with_clip(plot_area, |frame| {
-			frame.translate(iced::Vector::new(plot_area.x, plot_area.y));
+		backend.with_save(&mut |backend| {
+			backend.translate(iced::Vector::new(plot_area.x, plot_area.y));
 			self.kernel.plot(
-				frame,
+				backend,
 				plot_area,
 				&transform,
-				plot_cursor,
+				Cursor::Unavailable,
 				self.settings.clone(),
 			);
 			match &layout {
 				PlotLayout::Cartesian {
 					x_range, y_range, ..
 				} => {
-					self.draw_cartesian_grid(frame, plot_area, &transform, *x_range, *y_range);
+					self.draw_cartesian_grid(backend, plot_area, &transform, *x_range, *y_range);
 				}
 				PlotLayout::CategoricalX {
 					categories,
 					y_range,
 				} => {
-					self.draw_categorical_grid(frame, plot_area, &transform, categories, *y_range);
+					self.draw_categorical_grid(backend, plot_area, &transform, categories, *y_range);
 				}
 				PlotLayout::CategoricalY {
 					categories,
 					x_range,
 				} => {
 					self.draw_categorical_y_grid(
-						frame, plot_area, &transform, categories, *x_range,
+						backend, plot_area, &transform, categories, *x_range,
 					);
 				}
 				_ => {}
 			}
 		});
-		frame.with_save(|frame| {
-			frame.translate(iced::Vector::new(plot_area.x, plot_area.y));
+		let bg = self.settings.background_color;
+		let canvas_w = bounds.width;
+		let canvas_h = bounds.height;
+		backend.fill_rectangle(Point::ORIGIN, iced::Size::new(canvas_w, plot_area.y), bg);
+		backend.fill_rectangle(
+			Point::new(0.0, plot_area.y + plot_area.height),
+			iced::Size::new(canvas_w, canvas_h - plot_area.y - plot_area.height),
+			bg,
+		);
+		backend.fill_rectangle(
+			Point::new(0.0, plot_area.y),
+			iced::Size::new(plot_area.x, plot_area.height),
+			bg,
+		);
+		backend.fill_rectangle(
+			Point::new(plot_area.x + plot_area.width, plot_area.y),
+			iced::Size::new(canvas_w - plot_area.x - plot_area.width, plot_area.height),
+			bg,
+		);
+		backend.with_save(&mut |backend| {
+			backend.translate(iced::Vector::new(plot_area.x, plot_area.y));
 			match &layout {
 				PlotLayout::Cartesian {
 					x_range, y_range, ..
 				} => {
-					self.draw_cartesian_axes(frame, plot_area, &transform, *x_range, *y_range);
+					self.draw_cartesian_axes(backend, plot_area, &transform, *x_range, *y_range);
 				}
 				PlotLayout::CategoricalX {
 					categories,
 					y_range,
 				} => {
-					self.draw_categorical_axes(frame, plot_area, &transform, categories, *y_range);
+					self.draw_categorical_axes(backend, plot_area, &transform, categories, *y_range);
 				}
 				PlotLayout::CategoricalY {
 					categories,
 					x_range,
 				} => {
 					self.draw_categorical_y_axes(
-						frame, plot_area, &transform, categories, *x_range,
+						backend, plot_area, &transform, categories, *x_range,
 					);
 				}
 				PlotLayout::CategoricalXY {
@@ -427,7 +511,7 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 					y_categories,
 				} => {
 					self.draw_categorical_xy_axes(
-						frame,
+						backend,
 						plot_area,
 						&transform,
 						x_categories,
@@ -435,26 +519,30 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 					);
 				}
 				PlotLayout::Parallel { dimensions, ranges } => {
-					self.draw_parallel_axes(frame, plot_area, &transform, dimensions, ranges);
+					self.draw_parallel_axes(backend, plot_area, &transform, dimensions, ranges);
 				}
 				PlotLayout::Radial => {}
 			}
 		});
-		self.kernel.draw_legend(&mut frame, bounds, self.settings.clone());
+		let size_only_bounds = Rectangle::new(Point::ORIGIN, bounds.size());
+		self.kernel.draw_legend(backend, size_only_bounds, self.settings.clone());
 		let title = self.settings.title.as_ref().map(|s: &Arc<String>| s.to_string()).unwrap_or(self.title.clone());
-		frame.fill_text(Text {
+		let subtitle = self.settings.subtitle.as_ref().map(|s| s.as_ref().to_string());
+		let x_label = self.settings.x_label.as_ref().map(|s: &Arc<String>| s.to_string()).unwrap_or(self.kernel.x_label());
+		let y_label = self.settings.y_label.as_ref().map(|s: &Arc<String>| s.to_string()).unwrap_or(self.kernel.y_label());
+		backend.fill_text(Text {
 			content: title,
-			position: Point::new(bounds.width / 2.0, self.settings.title_offset),
+			position: Point::new(size_only_bounds.width / 2.0, self.settings.title_offset),
 			color: self.settings.decoration_color,
 			size: iced::Pixels(self.settings.title_size),
 			align_x: alignment::Horizontal::Center.into(),
 			align_y: alignment::Vertical::Top,
 			..Default::default()
 		});
-		if let Some(subtitle) = &self.settings.subtitle {
-			frame.fill_text(Text {
-				content: subtitle.as_ref().to_string(),
-				position: Point::new(bounds.width / 2.0, self.settings.subtitle_offset),
+		if let Some(st) = subtitle {
+			backend.fill_text(Text {
+				content: st,
+				position: Point::new(size_only_bounds.width / 2.0, self.settings.subtitle_offset),
 				color: self.settings.decoration_color,
 				size: iced::Pixels(self.settings.subtitle_size),
 				align_x: alignment::Horizontal::Center.into(),
@@ -462,10 +550,8 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 				..Default::default()
 			});
 		}
-		let x_label = self.settings.x_label.as_ref().map(|s: &Arc<String>| s.to_string()).unwrap_or(self.kernel.x_label());
-		let y_label = self.settings.y_label.as_ref().map(|s: &Arc<String>| s.to_string()).unwrap_or(self.kernel.y_label());
 		if !x_label.is_empty() {
-			frame.fill_text(Text {
+			backend.fill_text(Text {
 				content: x_label,
 				position: Point::new(
 					plot_area.x + plot_area.width / 2.0,
@@ -479,14 +565,14 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 			});
 		}
 		if !y_label.is_empty() {
-			frame.with_save(|frame| {
-				frame.translate(iced::Vector::new(
+			backend.with_save(&mut |backend| {
+				backend.translate(iced::Vector::new(
 					plot_area.x - self.settings.y_label_padding,
 					plot_area.y + plot_area.height / 2.0,
 				));
-				frame.rotate(-std::f32::consts::FRAC_PI_2);
-				frame.fill_text(Text {
-					content: y_label,
+				backend.rotate(-std::f32::consts::FRAC_PI_2);
+				backend.fill_text(Text {
+					content: y_label.clone(),
 					position: Point::ORIGIN,
 					color: self.settings.decoration_color,
 					size: iced::Pixels(self.settings.y_label_size),
@@ -496,6 +582,23 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 				});
 			});
 		}
+	}
+}
+
+impl<'a> Program<PlotMessage> for PlotWidget<'a> {
+	type State = Option<std::time::Instant>;
+
+	fn draw(
+		&self,
+		_state: &Self::State,
+		renderer: &Renderer,
+		_theme: &Theme,
+		bounds: Rectangle,
+		_cursor: Cursor,
+	) -> Vec<Geometry> {
+		let mut frame = Frame::new(renderer, bounds.size());
+		let mut backend = IcedBackend { frame: &mut frame };
+		self.render(&mut backend, bounds);
 		vec![frame.into_geometry()]
 	}
 
@@ -508,10 +611,10 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 	) -> Option<canvas::Action<PlotMessage>> {
 		match event {
 			Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
-				let padding_top = self.padding + 50.0;
-				let padding_bottom = self.padding + 60.0;
-				let padding_left = self.padding + 100.0;
-				let padding_right = self.padding + 20.0;
+				let padding_top = self.padding + self.settings.plot_padding_top;
+				let padding_bottom = self.padding + self.settings.plot_padding_bottom;
+				let padding_left = self.padding + self.settings.plot_padding_left;
+				let padding_right = self.padding + self.settings.plot_padding_right;
 				let plot_area = Rectangle {
 					x: padding_left,
 					y: padding_top,
@@ -551,7 +654,7 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 impl<'a> PlotWidget<'a> {
 	fn draw_cartesian_grid(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_area: Rectangle,
 		transform: &CoordinateTransformer,
 		x_range: (f64, f64),
@@ -573,12 +676,14 @@ impl<'a> PlotWidget<'a> {
 			}
 			s
 		};
-		let draw_line = |frame: &mut Frame, p1: Point, p2: Point, stroke: Stroke| {
-			let path = Path::new(|builder| {
-				builder.move_to(p1);
-				builder.line_to(p2);
-			});
-			frame.stroke(&path, stroke);
+		let draw_line = |backend: &mut dyn PlotBackend, p1: Point, p2: Point, stroke: Stroke| {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(p1);
+					builder.line_to(p2);
+				},
+				stroke,
+			);
 		};
 		if self.settings.show_y_minor_grid && self.settings.y_minor_ticks > 0 {
 			let stroke = grid_stroke(self.settings.y_minor_grid_width, self.settings.y_minor_grid_style);
@@ -587,7 +692,7 @@ impl<'a> PlotWidget<'a> {
 					let t = (i as f64 + j as f64 / (self.settings.y_minor_ticks + 1) as f64) / self.settings.y_ticks as f64;
 					if t > 1.0 { continue; }
 					let data_y = y_range.0 + (y_range.1 - y_range.0) * t;
-					draw_line(frame, transform.cartesian(x_range.0, data_y), transform.cartesian(x_range.1, data_y), stroke);
+					draw_line(backend, transform.cartesian(x_range.0, data_y), transform.cartesian(x_range.1, data_y), stroke);
 				}
 			}
 		}
@@ -598,7 +703,7 @@ impl<'a> PlotWidget<'a> {
 					let t = (i as f64 + j as f64 / (self.settings.x_minor_ticks + 1) as f64) / self.settings.x_ticks as f64;
 					if t > 1.0 { continue; }
 					let data_x = x_range.0 + (x_range.1 - x_range.0) * t;
-					draw_line(frame, transform.cartesian(data_x, y_range.0), transform.cartesian(data_x, y_range.1), stroke);
+					draw_line(backend, transform.cartesian(data_x, y_range.0), transform.cartesian(data_x, y_range.1), stroke);
 				}
 			}
 		}
@@ -607,7 +712,7 @@ impl<'a> PlotWidget<'a> {
 			for i in 0..=self.settings.y_ticks {
 				let t = i as f64 / self.settings.y_ticks as f64;
 				let data_y = y_range.0 + (y_range.1 - y_range.0) * t;
-				draw_line(frame, transform.cartesian(x_range.0, data_y), transform.cartesian(x_range.1, data_y), stroke);
+				draw_line(backend, transform.cartesian(x_range.0, data_y), transform.cartesian(x_range.1, data_y), stroke);
 			}
 		}
 		if self.settings.show_x_major_grid {
@@ -615,14 +720,14 @@ impl<'a> PlotWidget<'a> {
 			for i in 0..=self.settings.x_ticks {
 				let t = i as f64 / self.settings.x_ticks as f64;
 				let data_x = x_range.0 + (x_range.1 - x_range.0) * t;
-				draw_line(frame, transform.cartesian(data_x, y_range.0), transform.cartesian(data_x, y_range.1), stroke);
+				draw_line(backend, transform.cartesian(data_x, y_range.0), transform.cartesian(data_x, y_range.1), stroke);
 			}
 		}
 	}
 
 	fn draw_cartesian_axes(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_area: Rectangle,
 		transform: &CoordinateTransformer,
 		x_range: (f64, f64),
@@ -648,26 +753,28 @@ impl<'a> PlotWidget<'a> {
 			width: 2.0,
 			..Default::default()
 		};
-		let axes_path = Path::new(|builder| {
+		let axes_path = |builder: &mut dyn PathBuilder| {
 			let origin = transform.cartesian(x_range.0, y_range.0);
 			let x_max = transform.cartesian(x_range.1, y_range.0);
 			let y_max = transform.cartesian(x_range.0, y_range.1);
 			builder.move_to(y_max);
 			builder.line_to(origin);
 			builder.line_to(x_max);
-		});
-		frame.stroke(&axes_path, halo_stroke);
-		frame.stroke(&axes_path, axis_stroke);
+		};
+		backend.stroke_path(&axes_path, halo_stroke);
+		backend.stroke_path(&axes_path, axis_stroke);
 		for i in 0..=self.settings.y_ticks {
 			let t = i as f64 / self.settings.y_ticks as f64;
 			let data_y = y_range.0 + (y_range.1 - y_range.0) * t;
 			let p_left = transform.cartesian(x_range.0, data_y);
-			let tick_path = Path::new(|builder| {
-				builder.move_to(p_left);
-				builder.line_to(Point::new(p_left.x - 5.0, p_left.y));
-			});
-			frame.stroke(&tick_path, axis_stroke);
-			frame.fill_text(Text {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(p_left);
+					builder.line_to(Point::new(p_left.x - 5.0, p_left.y));
+				},
+				axis_stroke,
+			);
+			backend.fill_text(Text {
 				content: format_label(data_y, y_axis_type),
 				position: Point::new(p_left.x - 10.0, p_left.y),
 				color: self.settings.decoration_color,
@@ -684,11 +791,13 @@ impl<'a> PlotWidget<'a> {
 					if t > 1.0 { continue; }
 					let data_y = y_range.0 + (y_range.1 - y_range.0) * t;
 					let p_left = transform.cartesian(x_range.0, data_y);
-					let tick_path = Path::new(|builder| {
-						builder.move_to(p_left);
-						builder.line_to(Point::new(p_left.x - 3.0, p_left.y));
-					});
-					frame.stroke(&tick_path, axis_stroke);
+					backend.stroke_path(
+						&|builder| {
+							builder.move_to(p_left);
+							builder.line_to(Point::new(p_left.x - 3.0, p_left.y));
+						},
+						axis_stroke,
+					);
 				}
 			}
 		}
@@ -696,18 +805,20 @@ impl<'a> PlotWidget<'a> {
 			let t = i as f64 / self.settings.x_ticks as f64;
 			let data_x = x_range.0 + (x_range.1 - x_range.0) * t;
 			let p_bottom = transform.cartesian(data_x, y_range.0);
-			let tick_path = Path::new(|builder| {
-				builder.move_to(p_bottom);
-				builder.line_to(Point::new(p_bottom.x, p_bottom.y + 5.0));
-			});
-			frame.stroke(&tick_path, axis_stroke);
-			frame.with_save(|frame| {
-				frame.translate(iced::Vector::new(
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(p_bottom);
+					builder.line_to(Point::new(p_bottom.x, p_bottom.y + 5.0));
+				},
+				axis_stroke,
+			);
+			backend.with_save(&mut |backend| {
+				backend.translate(iced::Vector::new(
 					p_bottom.x,
 					p_bottom.y + self.settings.x_label_offset,
 				));
-				frame.rotate(self.settings.x_label_rotation.to_radians());
-				frame.fill_text(Text {
+				backend.rotate(self.settings.x_label_rotation.to_radians());
+				backend.fill_text(Text {
 					content: format_label(data_x, x_axis_type),
 					position: Point::ORIGIN,
 					color: self.settings.decoration_color,
@@ -724,11 +835,13 @@ impl<'a> PlotWidget<'a> {
 					if t > 1.0 { continue; }
 					let data_x = x_range.0 + (x_range.1 - x_range.0) * t;
 					let p_bottom = transform.cartesian(data_x, y_range.0);
-					let tick_path = Path::new(|builder| {
-						builder.move_to(p_bottom);
-						builder.line_to(Point::new(p_bottom.x, p_bottom.y + 3.0));
-					});
-					frame.stroke(&tick_path, axis_stroke);
+					backend.stroke_path(
+						&|builder| {
+							builder.move_to(p_bottom);
+							builder.line_to(Point::new(p_bottom.x, p_bottom.y + 3.0));
+						},
+						axis_stroke,
+					);
 				}
 			}
 		}
@@ -736,7 +849,7 @@ impl<'a> PlotWidget<'a> {
 
 	fn draw_categorical_grid(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_area: Rectangle,
 		transform: &CoordinateTransformer,
 		categories: &[String],
@@ -758,12 +871,14 @@ impl<'a> PlotWidget<'a> {
 			}
 			s
 		};
-		let draw_line = |frame: &mut Frame, p1: Point, p2: Point, stroke: Stroke| {
-			let path = Path::new(|builder| {
-				builder.move_to(p1);
-				builder.line_to(p2);
-			});
-			frame.stroke(&path, stroke);
+		let draw_line = |backend: &mut dyn PlotBackend, p1: Point, p2: Point, stroke: Stroke| {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(p1);
+					builder.line_to(p2);
+				},
+				stroke,
+			);
 		};
 		let (first_cat_center, band_width) = transform.categorical(0, y_range.1);
 		let left_edge = first_cat_center.x - (band_width / 2.0);
@@ -778,7 +893,7 @@ impl<'a> PlotWidget<'a> {
 					let data_y = y_range.0 + (y_range.1 - y_range.0) * t;
 					let p1 = Point::new(left_edge, transform.categorical(0, data_y).0.y);
 					let p2 = Point::new(right_edge, p1.y);
-					draw_line(frame, p1, p2, stroke);
+					draw_line(backend, p1, p2, stroke);
 				}
 			}
 		}
@@ -789,14 +904,14 @@ impl<'a> PlotWidget<'a> {
 				let data_y = y_range.0 + (y_range.1 - y_range.0) * t;
 				let p1 = Point::new(left_edge, transform.categorical(0, data_y).0.y);
 				let p2 = Point::new(right_edge, p1.y);
-				draw_line(frame, p1, p2, stroke);
+				draw_line(backend, p1, p2, stroke);
 			}
 		}
 	}
 
 	fn draw_categorical_axes(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_area: Rectangle,
 		transform: &CoordinateTransformer,
 		categories: &[String],
@@ -816,27 +931,29 @@ impl<'a> PlotWidget<'a> {
 		let left_edge = first_cat_center.x - (band_width / 2.0);
 		let (last_cat_center, _) = transform.categorical(categories.len() - 1, y_range.0);
 		let right_edge = last_cat_center.x + (band_width / 2.0);
-		let axes_path = Path::new(|builder| {
+		let axes_path = |builder: &mut dyn PathBuilder| {
 			let top_y = first_cat_center.y;
 			let bottom_y = last_cat_center.y;
 			builder.move_to(Point::new(left_edge, top_y));
 			builder.line_to(Point::new(left_edge, bottom_y));
 			builder.line_to(Point::new(right_edge, bottom_y));
-		});
-		frame.stroke(&axes_path, halo_stroke);
-		frame.stroke(&axes_path, axis_stroke);
+		};
+		backend.stroke_path(&axes_path, halo_stroke);
+		backend.stroke_path(&axes_path, axis_stroke);
 		for i in 0..=self.settings.y_ticks {
 			let t = i as f64 / self.settings.y_ticks as f64;
 			let data_y = y_range.0 + (y_range.1 - y_range.0) * t;
 			let (center, band_width) = transform.categorical(0, data_y);
 			let left_edge = center.x - (band_width / 2.0);
 			let p_left = Point::new(left_edge, center.y);
-			let tick_path = Path::new(|builder| {
-				builder.move_to(p_left);
-				builder.line_to(Point::new(p_left.x - 5.0, p_left.y));
-			});
-			frame.stroke(&tick_path, axis_stroke);
-			frame.fill_text(Text {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(p_left);
+					builder.line_to(Point::new(p_left.x - 5.0, p_left.y));
+				},
+				axis_stroke,
+			);
+			backend.fill_text(Text {
 				content: format_label(data_y, AxisType::Linear),
 				position: Point::new(p_left.x - 10.0, p_left.y),
 				color: self.settings.decoration_color,
@@ -848,18 +965,20 @@ impl<'a> PlotWidget<'a> {
 		}
 		for (i, cat) in categories.iter().enumerate() {
 			let (center_px, _band_width) = transform.categorical(i, y_range.0);
-			let tick_path = Path::new(|builder| {
-				builder.move_to(center_px);
-				builder.line_to(Point::new(center_px.x, center_px.y + 5.0));
-			});
-			frame.stroke(&tick_path, axis_stroke);
-			frame.with_save(|frame| {
-				frame.translate(iced::Vector::new(
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(center_px);
+					builder.line_to(Point::new(center_px.x, center_px.y + 5.0));
+				},
+				axis_stroke,
+			);
+			backend.with_save(&mut |backend| {
+				backend.translate(iced::Vector::new(
 					center_px.x,
 					center_px.y + self.settings.x_label_offset,
 				));
-				frame.rotate(self.settings.x_label_rotation.to_radians());
-				frame.fill_text(Text {
+				backend.rotate(self.settings.x_label_rotation.to_radians());
+				backend.fill_text(Text {
 					content: cat.clone(),
 					position: Point::ORIGIN,
 					color: self.settings.decoration_color,
@@ -873,7 +992,7 @@ impl<'a> PlotWidget<'a> {
 
 	fn draw_categorical_y_grid(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_area: Rectangle,
 		transform: &CoordinateTransformer,
 		categories: &[String],
@@ -895,12 +1014,14 @@ impl<'a> PlotWidget<'a> {
 			}
 			s
 		};
-		let draw_line = |frame: &mut Frame, p1: Point, p2: Point, stroke: Stroke| {
-			let path = Path::new(|builder| {
-				builder.move_to(p1);
-				builder.line_to(p2);
-			});
-			frame.stroke(&path, stroke);
+		let draw_line = |backend: &mut dyn PlotBackend, p1: Point, p2: Point, stroke: Stroke| {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(p1);
+					builder.line_to(p2);
+				},
+				stroke,
+			);
 		};
 		let (first_cat_center, band_height) = transform.categorical(0, x_range.0);
 		let bottom_edge = first_cat_center.y + (band_height / 2.0);
@@ -914,7 +1035,7 @@ impl<'a> PlotWidget<'a> {
 					if t > 1.0 { continue; }
 					let data_x = x_range.0 + (x_range.1 - x_range.0) * t;
 					let x = transform.categorical(0, data_x).0.x;
-					draw_line(frame, Point::new(x, top_edge), Point::new(x, bottom_edge), stroke);
+					draw_line(backend, Point::new(x, top_edge), Point::new(x, bottom_edge), stroke);
 				}
 			}
 		}
@@ -924,14 +1045,14 @@ impl<'a> PlotWidget<'a> {
 				let t = i as f64 / self.settings.x_ticks as f64;
 				let data_x = x_range.0 + (x_range.1 - x_range.0) * t;
 				let x = transform.categorical(0, data_x).0.x;
-				draw_line(frame, Point::new(x, top_edge), Point::new(x, bottom_edge), stroke);
+				draw_line(backend, Point::new(x, top_edge), Point::new(x, bottom_edge), stroke);
 			}
 		}
 	}
 
 	fn draw_categorical_y_axes(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_area: Rectangle,
 		transform: &CoordinateTransformer,
 		categories: &[String],
@@ -951,27 +1072,29 @@ impl<'a> PlotWidget<'a> {
 		let bottom_edge = first_cat_center.y + (band_height / 2.0);
 		let (last_cat_center, _) = transform.categorical(categories.len() - 1, x_range.1);
 		let top_edge = last_cat_center.y - (band_height / 2.0);
-		let axes_path = Path::new(|builder| {
+		let axes_path = |builder: &mut dyn PathBuilder| {
 			let left_x = first_cat_center.x;
 			let right_x = last_cat_center.x;
 			builder.move_to(Point::new(left_x, top_edge));
 			builder.line_to(Point::new(left_x, bottom_edge));
 			builder.line_to(Point::new(right_x, bottom_edge));
-		});
-		frame.stroke(&axes_path, halo_stroke);
-		frame.stroke(&axes_path, axis_stroke);
+		};
+		backend.stroke_path(&axes_path, halo_stroke);
+		backend.stroke_path(&axes_path, axis_stroke);
 		for i in 0..=self.settings.x_ticks {
 			let t = i as f64 / self.settings.x_ticks as f64;
 			let data_x = x_range.0 + (x_range.1 - x_range.0) * t;
 			let (center, band_height) = transform.categorical(0, data_x);
 			let bottom_edge = center.y + (band_height / 2.0);
 			let p_bottom = Point::new(center.x, bottom_edge);
-			let tick_path = Path::new(|builder| {
-				builder.move_to(p_bottom);
-				builder.line_to(Point::new(p_bottom.x, p_bottom.y + 5.0));
-			});
-			frame.stroke(&tick_path, axis_stroke);
-			frame.fill_text(Text {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(p_bottom);
+					builder.line_to(Point::new(p_bottom.x, p_bottom.y + 5.0));
+				},
+				axis_stroke,
+			);
+			backend.fill_text(Text {
 				content: format_label(data_x, AxisType::Linear),
 				position: Point::new(p_bottom.x, p_bottom.y + 10.0),
 				color: self.settings.decoration_color,
@@ -982,12 +1105,14 @@ impl<'a> PlotWidget<'a> {
 		}
 		for (i, cat) in categories.iter().enumerate() {
 			let (center_px, _band_height) = transform.categorical(i, x_range.0);
-			let tick_path = Path::new(|builder| {
-				builder.move_to(center_px);
-				builder.line_to(Point::new(center_px.x - 5.0, center_px.y));
-			});
-			frame.stroke(&tick_path, axis_stroke);
-			frame.fill_text(Text {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(center_px);
+					builder.line_to(Point::new(center_px.x - 5.0, center_px.y));
+				},
+				axis_stroke,
+			);
+			backend.fill_text(Text {
 				content: cat.clone(),
 				position: Point::new(center_px.x - 10.0, center_px.y),
 				color: self.settings.decoration_color,
@@ -1001,7 +1126,7 @@ impl<'a> PlotWidget<'a> {
 
 	fn draw_categorical_xy_axes(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_area: Rectangle,
 		transform: &CoordinateTransformer,
 		x_categories: &[String],
@@ -1017,7 +1142,7 @@ impl<'a> PlotWidget<'a> {
 			width: 2.0,
 			..Default::default()
 		};
-		let axes_path = Path::new(|builder| {
+		let axes_path = |builder: &mut dyn PathBuilder| {
 			let (first_p, _bw, bh) = transform.categorical_2d(0, 0);
 			let (last_p, bw, _bh) =
 				transform.categorical_2d(x_categories.len() - 1, y_categories.len() - 1);
@@ -1028,25 +1153,27 @@ impl<'a> PlotWidget<'a> {
 			builder.move_to(Point::new(left_x, top_y));
 			builder.line_to(Point::new(left_x, bottom_y));
 			builder.line_to(Point::new(right_x, bottom_y));
-		});
-		frame.stroke(&axes_path, halo_stroke);
-		frame.stroke(&axes_path, axis_stroke);
+		};
+		backend.stroke_path(&axes_path, halo_stroke);
+		backend.stroke_path(&axes_path, axis_stroke);
 		for (i, cat) in x_categories.iter().enumerate() {
 			let (p, _bw, bh) = transform.categorical_2d(i, 0);
 			let tick_x = p.x;
 			let tick_y = p.y + bh / 2.0;
-			let tick_path = Path::new(|builder| {
-				builder.move_to(Point::new(tick_x, tick_y));
-				builder.line_to(Point::new(tick_x, tick_y + 5.0));
-			});
-			frame.stroke(&tick_path, axis_stroke);
-			frame.with_save(|frame| {
-				frame.translate(iced::Vector::new(
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(Point::new(tick_x, tick_y));
+					builder.line_to(Point::new(tick_x, tick_y + 5.0));
+				},
+				axis_stroke,
+			);
+			backend.with_save(&mut |backend| {
+				backend.translate(iced::Vector::new(
 					tick_x,
 					tick_y + self.settings.x_label_offset,
 				));
-				frame.rotate(self.settings.x_label_rotation.to_radians());
-				frame.fill_text(Text {
+				backend.rotate(self.settings.x_label_rotation.to_radians());
+				backend.fill_text(Text {
 					content: cat.clone(),
 					position: Point::ORIGIN,
 					color: self.settings.decoration_color,
@@ -1060,12 +1187,14 @@ impl<'a> PlotWidget<'a> {
 			let (p, bw, _bh) = transform.categorical_2d(0, i);
 			let tick_x = p.x - bw / 2.0;
 			let tick_y = p.y;
-			let tick_path = Path::new(|builder| {
-				builder.move_to(Point::new(tick_x, tick_y));
-				builder.line_to(Point::new(tick_x - 5.0, tick_y));
-			});
-			frame.stroke(&tick_path, axis_stroke);
-			frame.fill_text(Text {
+			backend.stroke_path(
+				&|builder| {
+					builder.move_to(Point::new(tick_x, tick_y));
+					builder.line_to(Point::new(tick_x - 5.0, tick_y));
+				},
+				axis_stroke,
+			);
+			backend.fill_text(Text {
 				content: cat.clone(),
 				position: Point::new(tick_x - 10.0, tick_y),
 				color: self.settings.decoration_color,
@@ -1079,7 +1208,7 @@ impl<'a> PlotWidget<'a> {
 
 	fn draw_parallel_axes(
 		&self,
-		frame: &mut Frame,
+		backend: &mut dyn PlotBackend,
 		_area: Rectangle,
 		transform: &CoordinateTransformer,
 		dimensions: &[String],
@@ -1107,22 +1236,24 @@ impl<'a> PlotWidget<'a> {
 			let range = ranges[i];
 			let (top_px, _) = transform.categorical(i, range.1);
 			let (bottom_px, _) = transform.categorical(i, range.0);
-			let axis_path = Path::new(|builder| {
+			let axis_path = |builder: &mut dyn PathBuilder| {
 				builder.move_to(top_px);
 				builder.line_to(bottom_px);
-			});
-			frame.stroke(&axis_path, halo_stroke);
-			frame.stroke(&axis_path, axis_stroke);
+			};
+			backend.stroke_path(&axis_path, halo_stroke);
+			backend.stroke_path(&axis_path, axis_stroke);
 			for j in 0..=self.settings.y_ticks {
 				let t = j as f64 / self.settings.y_ticks as f64;
 				let data_y = range.0 + (range.1 - range.0) * t;
 				let (p, _) = transform.categorical(i, data_y);
-				let tick_path = Path::new(|builder| {
-					builder.move_to(p);
-					builder.line_to(Point::new(p.x - 6.0, p.y));
-				});
-				frame.stroke(&tick_path, tick_stroke);
-				frame.fill_text(Text {
+				backend.stroke_path(
+					&|builder| {
+						builder.move_to(p);
+						builder.line_to(Point::new(p.x - 6.0, p.y));
+					},
+					tick_stroke,
+				);
+				backend.fill_text(Text {
 					content: format_label(data_y, AxisType::Linear),
 					position: Point::new(p.x - 14.0, p.y),
 					color: self.settings.decoration_color,
@@ -1139,15 +1270,17 @@ impl<'a> PlotWidget<'a> {
 						if t > 1.0 { continue; }
 						let data_y = range.0 + (range.1 - range.0) * t;
 						let (p, _) = transform.categorical(i, data_y);
-						let tick_path = Path::new(|builder| {
-							builder.move_to(p);
-							builder.line_to(Point::new(p.x - 3.0, p.y));
-						});
-						frame.stroke(&tick_path, tick_stroke);
+						backend.stroke_path(
+							&|builder| {
+								builder.move_to(p);
+								builder.line_to(Point::new(p.x - 3.0, p.y));
+							},
+							tick_stroke,
+						);
 					}
 				}
 			}
-			frame.fill_text(Text {
+			backend.fill_text(Text {
 				content: dim.clone(),
 				position: Point::new(top_px.x, top_px.y - 20.0),
 				color: self.settings.decoration_color,
