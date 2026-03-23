@@ -30,6 +30,7 @@ pub fn run() -> Result {
 	application(new, update, view)
 		.theme(components::theme())
 		.title("Polariton")
+		.font(iced_aw::ICED_AW_FONT_BYTES)
 		.window(window::Settings {
 			decorations: false,
 			maximized: false,

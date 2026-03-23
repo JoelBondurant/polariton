@@ -3583,6 +3583,7 @@ dependencies = [
  "fontdb",
  "iced",
  "iced-code-editor",
+ "iced_aw",
  "kurbo 0.13.0",
  "png",
  "polars",

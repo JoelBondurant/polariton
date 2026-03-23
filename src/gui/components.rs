@@ -224,47 +224,117 @@ pub fn main_screen<'a>(
 }
 
 pub fn menu_bar<'a>() -> Element<'a, Message> {
-	row![
-		pick_list(&["New"][..], None::<&str>, |_| Message::Connect)
-			.placeholder("Connect")
-			.style(|_theme, _status| pick_list::Style {
-				background: Background::Color(colors::BG_SECONDARY),
-				border: border::Border::default(),
-				text_color: colors::TEXT_PRIMARY,
-				placeholder_color: colors::TEXT_PRIMARY,
-				handle_color: Color::TRANSPARENT,
-			})
-			.padding(8),
-		pick_list(&["Run"][..], None::<&str>, |_| Message::Run)
-			.placeholder("Code")
-			.style(|_theme, _status| pick_list::Style {
-				background: Background::Color(colors::BG_SECONDARY),
-				border: border::Border::default(),
-				text_color: colors::TEXT_PRIMARY,
-				placeholder_color: colors::TEXT_PRIMARY,
-				handle_color: Color::TRANSPARENT,
-			})
-			.padding(8),
-		pick_list(
-			&crate::gui::messages::PlotAction::ALL[..],
-			None::<crate::gui::messages::PlotAction>,
-			|action| match action {
-				crate::gui::messages::PlotAction::Add(pt) => Message::AddPlot(pt),
-				crate::gui::messages::PlotAction::Export(fmt) => Message::Export(fmt),
-			},
-		)
-		.placeholder("Plot")
-		.style(|_theme, _status| pick_list::Style {
-			background: Background::Color(colors::BG_SECONDARY),
-			border: border::Border::default(),
-			text_color: colors::TEXT_PRIMARY,
-			placeholder_color: colors::TEXT_PRIMARY,
-			handle_color: Color::TRANSPARENT,
+	use crate::gui::messages::ExportFormat;
+	use crate::plot::core::PlotType;
+	use iced::Border;
+	use iced_aw::{
+		menu::{Item, Menu},
+		menu_bar, menu_items,
+		style::menu_bar::Style as MenuStyle,
+	};
+	let bar_btn_style = |_theme: &Theme, _status: button::Status| button::Style {
+		background: Some(Background::Color(colors::BG_SECONDARY)),
+		text_color: colors::TEXT_PRIMARY,
+		border: border::Border::default(),
+		..Default::default()
+	};
+	let item_btn_style = |_theme: &Theme, status: button::Status| button::Style {
+		background: Some(Background::Color(match status {
+			button::Status::Hovered | button::Status::Pressed => colors::BG_BUTTON_HOVER,
+			_ => Color::TRANSPARENT,
+		})),
+		text_color: colors::TEXT_PRIMARY,
+		border: border::Border::default().rounded(3.0),
+		..Default::default()
+	};
+	let new_items: Vec<Item<'a, Message, Theme, iced::Renderer>> = PlotType::ALL
+		.iter()
+		.map(|&pt| {
+			Item::new(
+				button(text(format!("{pt}")).width(Fill))
+					.width(Fill)
+					.padding([4, 8])
+					.style(item_btn_style)
+					.on_press(Message::AddPlot(pt)),
+			)
 		})
-		.padding(8),
-	]
-	.spacing(10)
-	.padding(2)
+		.collect();
+	let new_menu = Menu::new(new_items).width(200.0).offset(0.0).spacing(2.0);
+	let export_items: Vec<Item<'a, Message, Theme, iced::Renderer>> =
+		[ExportFormat::SVG, ExportFormat::PNG]
+			.iter()
+			.map(|&fmt| {
+				Item::new(
+					button(text(format!("{fmt}")).width(Fill))
+						.width(Fill)
+						.padding([4, 8])
+						.style(item_btn_style)
+						.on_press(Message::Export(fmt)),
+				)
+			})
+			.collect();
+	let export_menu = Menu::new(export_items)
+		.width(100.0)
+		.offset(0.0)
+		.spacing(2.0);
+	let submenu_label = |label: &'static str| {
+		button(row![text(label).width(Fill), text("›")])
+			.width(Fill)
+			.padding([4, 8])
+			.style(item_btn_style)
+	};
+	menu_bar!(
+		(
+			button(text("Connect")).padding([4, 8]).style(bar_btn_style),
+			Menu::new(menu_items!(
+				(button(text("New Connection").width(Fill))
+					.width(Fill)
+					.padding([4, 8])
+					.style(item_btn_style)
+					.on_press(Message::Connect))
+			))
+			.width(160.0)
+			.offset(15.0)
+			.spacing(2.0)
+		),
+		(
+			button(text("Code")).padding([4, 8]).style(bar_btn_style),
+			Menu::new(menu_items!(
+				(button(text("Run").width(Fill))
+					.width(Fill)
+					.padding([4, 8])
+					.style(item_btn_style)
+					.on_press(Message::Run))
+			))
+			.width(100.0)
+			.offset(15.0)
+			.spacing(2.0)
+		),
+		(
+			button(text("Plot")).padding([4, 8]).style(bar_btn_style),
+			Menu::new(menu_items!(
+				(submenu_label("New"), new_menu),
+				(submenu_label("Export"), export_menu),
+			))
+			.width(120.0)
+			.offset(15.0)
+			.spacing(2.0)
+		)
+	)
+	.style(|_theme: &Theme, _status| MenuStyle {
+		bar_background: Background::Color(colors::BG_SECONDARY),
+		bar_border: Border::default(),
+		bar_shadow: Default::default(),
+		menu_background: Background::Color(colors::BG_SECONDARY),
+		menu_border: border::Border {
+			color: colors::BORDER_PRIMARY,
+			width: 1.0,
+			radius: 4.0.into(),
+		},
+		menu_shadow: Default::default(),
+		path: Background::Color(colors::BG_BUTTON),
+		path_border: Border::default(),
+	})
 	.into()
 }
 

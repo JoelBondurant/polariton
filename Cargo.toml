@@ -12,6 +12,7 @@ async-trait = "0.1.89"
 bytes = "1.11.1"
 chrono = "0.4.41"
 iced = { version = "0.14.0", features = ["advanced", "canvas", "tokio"] }
+iced_aw = { version = "0.13.0", default-features = false, features = ["menu"] }
 iced-code-editor = "0.3.7"
 polars = { version = "0.53.0", features = ["lazy", "parquet", "sql"] }
 rand = "0.10.0"

@@ -27,47 +27,6 @@ impl std::fmt::Display for ExportFormat {
 	}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlotAction {
-	Add(PlotType),
-	Export(ExportFormat),
-}
-
-impl std::fmt::Display for PlotAction {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			PlotAction::Add(pt) => write!(f, "New > {}", pt),
-			PlotAction::Export(fmt) => write!(f, "Export > {}", fmt),
-		}
-	}
-}
-
-impl PlotAction {
-	pub const ALL: [PlotAction; 22] = [
-		PlotAction::Add(PlotType::Bar),
-		PlotAction::Add(PlotType::BoxPlot),
-		PlotAction::Add(PlotType::Bubble),
-		PlotAction::Add(PlotType::Candlestick),
-		PlotAction::Add(PlotType::FillBetween),
-		PlotAction::Add(PlotType::Funnel),
-		PlotAction::Add(PlotType::Heatmap),
-		PlotAction::Add(PlotType::Hexbin),
-		PlotAction::Add(PlotType::Histogram),
-		PlotAction::Add(PlotType::HorizontalBar),
-		PlotAction::Add(PlotType::HorizontalStackedBar),
-		PlotAction::Add(PlotType::Line),
-		PlotAction::Add(PlotType::Parallel),
-		PlotAction::Add(PlotType::Pie),
-		PlotAction::Add(PlotType::Radar),
-		PlotAction::Add(PlotType::RadialDial),
-		PlotAction::Add(PlotType::Scatter),
-		PlotAction::Add(PlotType::StackedArea),
-		PlotAction::Add(PlotType::StackedBar),
-		PlotAction::Add(PlotType::Violin),
-		PlotAction::Export(ExportFormat::SVG),
-		PlotAction::Export(ExportFormat::PNG),
-	];
-}
 
 #[derive(Clone)]
 pub enum Message {
