@@ -16,6 +16,17 @@ pub enum AdapterSelection {
 	SQLite,
 }
 
+impl AdapterSelection {
+	pub fn adapter_type_str(&self) -> &str {
+		match self {
+			AdapterSelection::None => "None",
+			AdapterSelection::Parquet => "Parquet",
+			AdapterSelection::Postgres => "Postgres",
+			AdapterSelection::SQLite => "SQLite",
+		}
+	}
+}
+
 #[derive(Clone, Debug, Default)]
 pub enum AdapterConfiguration {
 	#[default]
@@ -35,9 +46,27 @@ pub enum AdapterConfiguration {
 pub struct AdapterState {
 	pub stage: AdapterStage,
 	pub selection: AdapterSelection,
+	pub name: String,
 	pub fields: BTreeMap<String, String>,
 	pub configuration: AdapterConfiguration,
 	pub connection: Option<Arc<RwLock<dyn DatabaseAdapter>>>,
+}
+
+impl AdapterConfiguration {
+	pub fn from_saved(adapter_type: &str, config_value: &str) -> Self {
+		match adapter_type {
+			"Parquet" => AdapterConfiguration::Parquet {
+				input_path: config_value.to_string(),
+			},
+			"Postgres" => AdapterConfiguration::Postgres {
+				connection_string: config_value.to_string(),
+			},
+			"SQLite" => AdapterConfiguration::SQLite {
+				connection_string: config_value.to_string(),
+			},
+			_ => AdapterConfiguration::None,
+		}
+	}
 }
 
 impl AdapterState {

@@ -1,7 +1,8 @@
 use crate::adapters::{
 	common::{AdapterStage, ExecutionResult},
-	driver::AdapterState,
+	driver::{AdapterConfiguration, AdapterSelection, AdapterState},
 };
+use crate::persistence::{self, SavedConnection};
 use crate::gui::{
 	components::{self, PaneType},
 	messages::{ExportFormat, Message, PlotMessage},
@@ -22,6 +23,8 @@ struct AppState {
 	adapter_state: AdapterState,
 	code_started: Instant,
 	is_maximized: bool,
+	saved_connections: Vec<SavedConnection>,
+	editing_connection_id: Option<i64>,
 }
 
 pub type Result = iced::Result;
@@ -44,7 +47,7 @@ pub fn run() -> Result {
 		.run()
 }
 
-fn new() -> AppState {
+fn new() -> (AppState, Task<Message>) {
 	let data_frame = DataFrame::default();
 	let (mut panes, editor_pane) = pane_grid::State::new(PaneType::CodeEditor);
 	let (_data_pane, _) = panes
@@ -61,7 +64,7 @@ fn new() -> AppState {
 	code_editor.set_theme(iced_code_editor::theme::from_iced_theme(
 		&components::theme(),
 	));
-	AppState {
+	let state = AppState {
 		panes,
 		dashboard: None,
 		code_editor,
@@ -70,7 +73,14 @@ fn new() -> AppState {
 		adapter_state: AdapterState::default(),
 		code_started: Instant::now(),
 		is_maximized: false,
-	}
+		saved_connections: vec![],
+		editing_connection_id: None,
+	};
+	let task = Task::perform(
+		async { persistence::load().await },
+		Message::SavedConnectionsLoaded,
+	);
+	(state, task)
 }
 
 fn view(app_state: &AppState) -> Element<'_, Message> {
@@ -81,6 +91,7 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 		&app_state.data_frame,
 		&app_state.status,
 		&app_state.adapter_state,
+		&app_state.saved_connections,
 	)
 }
 
@@ -148,6 +159,13 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			app_state.status = "Configure adapter.".into();
 		}
 		Message::AdapterConfigurationSubmitted => {
+			let has_empty = crate::adapters::driver::fields_for(&app_state.adapter_state.selection)
+				.iter()
+				.any(|f| app_state.adapter_state.fields.get(f.key).map_or(true, |v| v.trim().is_empty()));
+			if has_empty {
+				app_state.status = "All connection fields are required.".to_string();
+				return Task::none();
+			}
 			app_state.adapter_state.configure();
 			app_state.status = "Adapter configured.".into();
 			app_state.adapter_state.stage = AdapterStage::Configured;
@@ -325,6 +343,84 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::ExportDone(count, format) => {
 			app_state.status = format!("Exported {count} plots as {format}.");
+		}
+		Message::ConnectionNameChanged(name) => {
+			app_state.adapter_state.name = name;
+		}
+		Message::SaveConnection => {
+			let name = app_state.adapter_state.name.trim().to_string();
+			if name.is_empty() {
+				app_state.status = "Connection name is required.".to_string();
+				return Task::none();
+			}
+			let fields = crate::adapters::driver::fields_for(&app_state.adapter_state.selection);
+			let has_empty = fields
+				.iter()
+				.any(|f| app_state.adapter_state.fields.get(f.key).map_or(true, |v| v.trim().is_empty()));
+			if has_empty {
+				app_state.status = "All connection fields are required.".to_string();
+				return Task::none();
+			}
+			let config_value = fields
+				.first()
+				.and_then(|f| app_state.adapter_state.fields.get(f.key))
+				.cloned()
+				.unwrap_or_default();
+			if let Some(edit_id) = app_state.editing_connection_id.take() {
+				return Task::perform(
+					async move { persistence::update(edit_id, name, config_value).await },
+					Message::ConnectionSaved,
+				);
+			}
+			let adapter_type = app_state.adapter_state.selection.adapter_type_str().to_string();
+			return Task::perform(
+				async move { persistence::save(name, adapter_type, config_value).await },
+				Message::ConnectionSaved,
+			);
+		}
+		Message::ConnectionSaved(connections) => {
+			app_state.saved_connections = connections;
+			app_state.status = "Connection saved.".to_string();
+		}
+		Message::SavedConnectionsLoaded(connections) => {
+			app_state.saved_connections = connections;
+		}
+		Message::LoadSavedConnection(id) => {
+			if let Some(saved) = app_state.saved_connections.iter().find(|c| c.id == id) {
+				let config = AdapterConfiguration::from_saved(&saved.adapter_type, &saved.config_value);
+				app_state.status = format!("Connecting to {}...", saved.name);
+				app_state.adapter_state.stage = crate::adapters::common::AdapterStage::Configured;
+				return Task::perform(
+					async move { AdapterState::connect(config).await },
+					Message::AdapterConnected,
+				);
+			}
+		}
+		Message::EditConnection(id) => {
+			if let Some(saved) = app_state.saved_connections.iter().find(|c| c.id == id) {
+				let selection = match saved.adapter_type.as_str() {
+					"Parquet" => AdapterSelection::Parquet,
+					"Postgres" => AdapterSelection::Postgres,
+					"SQLite" => AdapterSelection::SQLite,
+					_ => AdapterSelection::None,
+				};
+				let field_key = match saved.adapter_type.as_str() {
+					"Parquet" => "input_path",
+					_ => "connection_string",
+				};
+				app_state.adapter_state.name = saved.name.clone();
+				app_state.adapter_state.selection = selection;
+				app_state.adapter_state.fields.clear();
+				app_state.adapter_state.fields.insert(field_key.to_string(), saved.config_value.clone());
+				app_state.adapter_state.stage = crate::adapters::common::AdapterStage::Unconfigured;
+				app_state.editing_connection_id = Some(id);
+			}
+		}
+		Message::DeleteConnection(id) => {
+			return Task::perform(
+				async move { persistence::delete(id).await },
+				Message::SavedConnectionsLoaded,
+			);
 		}
 	}
 	Task::none()

@@ -2,6 +2,7 @@ use crate::adapters::{
 	common::{DatabaseAdapter, ExecutionResult},
 	driver::AdapterSelection,
 };
+use crate::persistence::SavedConnection;
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::GridLineStyle;
 use crate::plot::core::PlotType;
@@ -56,6 +57,13 @@ pub enum Message {
 	Export(ExportFormat),
 	ExportWithWindowSize(ExportFormat, Option<iced::Size>),
 	ExportDone(usize, ExportFormat),
+	ConnectionNameChanged(String),
+	SaveConnection,
+	ConnectionSaved(Vec<SavedConnection>),
+	SavedConnectionsLoaded(Vec<SavedConnection>),
+	LoadSavedConnection(i64),
+	EditConnection(i64),
+	DeleteConnection(i64),
 }
 
 #[allow(dead_code)]

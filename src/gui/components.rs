@@ -5,6 +5,7 @@ use crate::adapters::{
 use crate::gui::messages::{Message, PlotMessage};
 use crate::gui::plot_state::PlotState;
 use crate::gui::{colors, table::Table};
+use crate::persistence::SavedConnection;
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::{GridLineStyle, PlotWidget};
 use crate::plot::core::PlotType;
@@ -176,6 +177,7 @@ pub fn main_screen<'a>(
 	data_frame: &'a DataFrame,
 	status: &'a str,
 	adapter_state: &'a AdapterState,
+	saved_connections: &'a [SavedConnection],
 ) -> Element<'a, Message> {
 	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
 		PaneType::CodeEditor => pane_grid::Content::new(center(
@@ -218,12 +220,12 @@ pub fn main_screen<'a>(
 	.height(30)
 	.padding(1)
 	.width(Fill);
-	let main_window = window_decorations(column![main_content, status_bar]);
+	let main_window = window_decorations(column![main_content, status_bar], saved_connections);
 	let adapter_modal = adapter_view(adapter_state);
 	stack![main_window, adapter_modal].into()
 }
 
-pub fn menu_bar<'a>() -> Element<'a, Message> {
+pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection]) -> Element<'a, Message> {
 	use crate::gui::messages::ExportFormat;
 	use crate::plot::core::PlotType;
 	use iced::Border;
@@ -283,6 +285,41 @@ pub fn menu_bar<'a>() -> Element<'a, Message> {
 			.padding([4, 8])
 			.style(item_btn_style)
 	};
+	let saved_items: Vec<Item<'a, Message, Theme, iced::Renderer>> = if saved_connections.is_empty()
+	{
+		vec![Item::new(
+			button(text("None saved").width(Fill))
+				.width(Fill)
+				.padding([4, 8])
+				.style(item_btn_style),
+		)]
+	} else {
+		saved_connections
+			.iter()
+			.map(|conn| {
+				let id = conn.id;
+				Item::new(
+					row![
+						button(text(conn.name.clone()).width(Fill))
+							.width(Fill)
+							.padding([4, 8])
+							.style(item_btn_style)
+							.on_press(Message::LoadSavedConnection(id)),
+						button(text("✎"))
+							.padding([4, 8])
+							.style(item_btn_style)
+							.on_press(Message::EditConnection(id)),
+						button(text("✕"))
+							.padding([4, 8])
+							.style(item_btn_style)
+							.on_press(Message::DeleteConnection(id)),
+					]
+					.spacing(2),
+				)
+			})
+			.collect()
+	};
+	let saved_menu = Menu::new(saved_items).width(240.0).offset(0.0).spacing(2.0);
 	menu_bar!(
 		(
 			button(text("Connect")).padding([4, 8]).style(bar_btn_style),
@@ -291,9 +328,10 @@ pub fn menu_bar<'a>() -> Element<'a, Message> {
 					.width(Fill)
 					.padding([4, 8])
 					.style(item_btn_style)
-					.on_press(Message::Connect))
+					.on_press(Message::Connect)),
+				(submenu_label("Saved"), saved_menu),
 			))
-			.width(100.0)
+			.width(160.0)
 			.offset(15.0)
 			.spacing(2.0)
 		),
@@ -1152,7 +1190,10 @@ fn horizontal_rule<'a>() -> Element<'a, Message> {
 		.into()
 }
 
-fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+fn window_decorations<'a>(
+	underlay: impl Into<Element<'a, Message>>,
+	saved_connections: &'a [SavedConnection],
+) -> Element<'a, Message> {
 	let resize_thin = 6;
 	let resize_thick = 60;
 	let resize_area_northeast_top =
@@ -1189,7 +1230,7 @@ fn window_decorations<'a>(underlay: impl Into<Element<'a, Message>>) -> Element<
 			],
 			column![
 				row![title_bar()],
-				row![menu_bar()],
+				row![menu_bar(saved_connections)],
 				underlay.into(),
 				row![
 					resize_area_southwest_bottom,
@@ -1389,44 +1430,75 @@ fn adapter_gallery_view() -> Element<'static, Message> {
 }
 
 pub fn adapter_configuration_view(adapter_state: &AdapterState) -> Element<'static, Message> {
-	let fields_col: Element<Message> = match &adapter_state.selection {
+	let name = adapter_state.name.clone();
+	let adapter_label = match &adapter_state.selection {
+		AdapterSelection::None => "None",
+		AdapterSelection::Parquet => "Parquet",
+		AdapterSelection::Postgres => "Postgres",
+		AdapterSelection::SQLite => "SQLite",
+	};
+	let fields_section: Element<Message> = match &adapter_state.selection {
 		AdapterSelection::None => text("Select an adapter to configure.").into(),
 		selection => {
 			let descriptors = fields_for(selection);
-			let inputs = descriptors.iter().fold(column![].spacing(8), |col, field| {
-				let current_value = adapter_state
-					.fields
-					.get(field.key)
-					.cloned()
-					.unwrap_or_default();
-				let key = field.key;
-				match field.field_type {
-					AdapterFieldType::Text => {
-						let input = if field.is_secure {
-							styled_text_input(field.value, &current_value).secure(true)
-						} else {
-							styled_text_input(field.value, &current_value)
-						};
-						let input = input
-							.on_input(move |val| {
-								Message::AdapterConfigurationChanged(key.into(), val)
-							})
-							.on_submit(Message::AdapterConfigurationSubmitted);
-						col.push(column![text(field.key), input,].spacing(4))
+			let inputs = descriptors
+				.iter()
+				.fold(column![].spacing(8), |col, descriptor| {
+					let current_value = adapter_state
+						.fields
+						.get(descriptor.key)
+						.cloned()
+						.unwrap_or_default();
+					let key = descriptor.key;
+					match descriptor.field_type {
+						AdapterFieldType::Text => {
+							let input = if descriptor.is_secure {
+								styled_text_input(descriptor.value, &current_value).secure(true)
+							} else {
+								styled_text_input(descriptor.value, &current_value)
+							};
+							let input = input
+								.on_input(move |val| {
+									Message::AdapterConfigurationChanged(key.into(), val)
+								})
+								.on_submit(Message::AdapterConfigurationSubmitted);
+							col.push(field(descriptor.key, input))
+						}
 					}
-				}
-			});
-			inputs.into()
+				});
+			section(adapter_label, inputs)
 		}
 	};
-	let dialog: Element<Message> = container(column![
-		space::vertical(),
-		center(text("Configure Adapter").size(24)),
-		row![space::horizontal(), fields_col, space::horizontal(),],
-		space::vertical(),
-	])
-	.width(FillPortion(MODAL_FILL_PORTION_H))
-	.height(FillPortion(MODAL_FILL_PORTION_V))
+	let dialog: Element<Message> = container(
+		column![
+			row![text("Configure Adapter").size(24), space::horizontal(),]
+				.align_y(Alignment::Center),
+			section(
+				"Connection",
+				field(
+					"Name",
+					styled_text_input("Required", &name)
+						.on_input(Message::ConnectionNameChanged)
+						.on_submit(Message::AdapterConfigurationSubmitted),
+				),
+			),
+			fields_section,
+			row![
+				space::horizontal(),
+				styled_button("Save", Message::SaveConnection, BUTTON_SIZE_DEFAULT),
+				styled_button(
+					"Connect",
+					Message::AdapterConfigurationSubmitted,
+					BUTTON_SIZE_DEFAULT,
+				),
+			]
+			.spacing(10)
+			.align_y(Alignment::Center),
+		]
+		.spacing(20)
+		.padding(20),
+	)
+	.width(Length::Fixed(800.0))
 	.style(|_| container::Style {
 		background: Some(colors::BG_MODAL.into()),
 		border: border::Border {
@@ -1439,11 +1511,7 @@ pub fn adapter_configuration_view(adapter_state: &AdapterState) -> Element<'stat
 	.into();
 	column![
 		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
-		row![
-			space::horizontal().width(FillPortion((100 - MODAL_FILL_PORTION_H) / 2)),
-			dialog,
-			space::horizontal().width(FillPortion((100 - MODAL_FILL_PORTION_H) / 2)),
-		],
+		row![space::horizontal(), dialog, space::horizontal(),],
 		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
 	]
 	.into()
