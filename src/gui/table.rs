@@ -20,8 +20,10 @@ use polars::{
 
 const ROW_HEIGHT: f32 = 28.0;
 const HEADER_HEIGHT: f32 = 32.0;
+const HEADER_HEIGHT_WITH_TYPES: f32 = 48.0;
+const TYPE_LABEL_FONT_SIZE: f32 = 13.0;
 const CELL_PADDING_X: f32 = 8.0;
-const FONT_SIZE: f32 = 13.0;
+const FONT_SIZE: f32 = 14.0;
 const MIN_COL_WIDTH: f32 = 28.0;
 const MAX_COL_WIDTH: f32 = 320.0;
 const V_SCROLLBAR_WIDTH: f32 = 12.0;
@@ -32,6 +34,7 @@ pub struct Table<'a> {
 	data_frame: &'a DataFrame,
 	row_offset: usize,
 	col_width: Option<f32>,
+	show_column_types: bool,
 }
 
 impl<'a> Table<'a> {
@@ -40,12 +43,26 @@ impl<'a> Table<'a> {
 			data_frame,
 			row_offset,
 			col_width: None,
+			show_column_types: false,
 		}
 	}
 
 	pub fn col_width(mut self, width: f32) -> Self {
 		self.col_width = Some(width);
 		self
+	}
+
+	pub fn show_column_types(mut self, show: bool) -> Self {
+		self.show_column_types = show;
+		self
+	}
+
+	fn header_height(&self) -> f32 {
+		if self.show_column_types {
+			HEADER_HEIGHT_WITH_TYPES
+		} else {
+			HEADER_HEIGHT
+		}
 	}
 
 	fn col_count(&self) -> usize {
@@ -97,7 +114,7 @@ impl<'a> Table<'a> {
 	}
 
 	fn total_content_height(&self) -> f32 {
-		HEADER_HEIGHT + self.total_row_count() as f32 * ROW_HEIGHT
+		self.header_height() + self.total_row_count() as f32 * ROW_HEIGHT
 	}
 
 	fn loaded_row_count(&self) -> usize {
@@ -132,7 +149,7 @@ impl<'a> Table<'a> {
 
 	fn row_num_width(&self, bounds: Rectangle, v_scroll: f64) -> f32 {
 		let first_visible = (v_scroll / ROW_HEIGHT as f64).floor() as usize;
-		let visible_count = ((bounds.height - HEADER_HEIGHT) / ROW_HEIGHT).ceil() as usize + 1;
+		let visible_count = ((bounds.height - self.header_height()) / ROW_HEIGHT).ceil() as usize + 1;
 		let max_idx = self.row_offset + first_visible + visible_count + 1;
 		let digits = if max_idx > 0 {
 			(max_idx as f64).log10().floor() as f32 + 1.0
@@ -150,7 +167,7 @@ impl<'a> Table<'a> {
 		cursor_y: f32,
 		row_num_w: f32,
 	) -> Option<usize> {
-		if cursor_y < bounds.y || cursor_y > bounds.y + HEADER_HEIGHT {
+		if cursor_y < bounds.y || cursor_y > bounds.y + self.header_height() {
 			return None;
 		}
 		if cursor_x < bounds.x + row_num_w {
@@ -195,11 +212,11 @@ impl<'a> Table<'a> {
 
 	fn v_scrollbar_thumb_rect(&self, bounds: Rectangle, v_scroll_offset: f64) -> Rectangle {
 		let total_h = self.total_content_height();
-		let track_h = bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT;
-		let thumb_h = (track_h * (track_h / (total_h - HEADER_HEIGHT).max(1.0))).max(20.0);
+		let track_h = bounds.height - self.header_height() - H_SCROLLBAR_HEIGHT;
+		let thumb_h = (track_h * (track_h / (total_h - self.header_height()).max(1.0))).max(20.0);
 		let max_scroll = (total_h - bounds.height + H_SCROLLBAR_HEIGHT).max(0.0);
 		let thumb_y = bounds.y
-			+ HEADER_HEIGHT
+			+ self.header_height()
 			+ if max_scroll > 0.0 {
 				v_scroll_offset as f32 / max_scroll * (track_h - thumb_h)
 			} else {
@@ -334,7 +351,7 @@ where
 					shell.request_redraw();
 				} else if state.v_dragging_scrollbar {
 					let drag_delta = position.y - state.v_drag_start_y;
-					let track_h = bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT;
+					let track_h = bounds.height - self.header_height() - H_SCROLLBAR_HEIGHT;
 					let thumb_h = v_thumb.height;
 					let scroll_ratio = drag_delta as f64 / (track_h - thumb_h).max(1.0) as f64;
 					state.v_scroll_offset = (state.v_drag_start_offset
@@ -388,7 +405,7 @@ where
 				shell.request_redraw();
 			}
 			Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) if cursor.is_over(bounds) => {
-				let page_size = (viewport_h - HEADER_HEIGHT) as f64;
+				let page_size = (viewport_h - self.header_height()) as f64;
 				match key {
 					keyboard::Key::Named(keyboard::key::Named::PageDown) => {
 						state.v_scroll_offset =
@@ -447,6 +464,7 @@ where
 		let row_num_w = self.row_num_width(bounds, v_scroll);
 		let viewport_w = bounds.width - V_SCROLLBAR_WIDTH - row_num_w;
 		let h_scroll = state.h_scroll_offset as f32;
+		let header_h = self.header_height();
 		renderer.fill_quad(
 			renderer::Quad {
 				bounds,
@@ -462,7 +480,7 @@ where
 						x: bounds.x,
 						y: bounds.y,
 						width: row_num_w,
-						height: HEADER_HEIGHT,
+						height: header_h,
 					},
 					..renderer::Quad::default()
 				},
@@ -475,7 +493,7 @@ where
 					x: bounds.x + CELL_PADDING_X,
 					y: bounds.y,
 					width: row_num_w - CELL_PADDING_X,
-					height: HEADER_HEIGHT,
+					height: header_h,
 				},
 				colors::TABLE_TEXT_HEADER,
 				true,
@@ -497,7 +515,7 @@ where
 				x: bounds.x + row_num_w,
 				y: bounds.y,
 				width: viewport_w,
-				height: HEADER_HEIGHT,
+				height: header_h,
 			};
 			renderer.fill_quad(
 				renderer::Quad {
@@ -521,7 +539,7 @@ where
 										x: cell_x,
 										y: bounds.y,
 										width: 1.0,
-										height: HEADER_HEIGHT,
+										height: header_h,
 									},
 									..renderer::Quad::default()
 								},
@@ -541,6 +559,23 @@ where
 							true,
 							Horizontal::Center,
 						);
+						if self.show_column_types
+							&& let Some(col) = self.data_frame.columns().get(col_idx) {
+								let dtype_label = format!("{}", col.dtype());
+								draw_text_sized(
+									renderer,
+									&dtype_label,
+									Rectangle {
+										x: cell_x + CELL_PADDING_X,
+										y: bounds.y + HEADER_HEIGHT,
+										width: col_w - CELL_PADDING_X,
+										height: header_h - HEADER_HEIGHT,
+									},
+									colors::TABLE_TYPE_LABEL,
+									TYPE_LABEL_FONT_SIZE,
+									Horizontal::Center,
+								);
+							}
 					}
 					cell_x += col_w;
 				}
@@ -550,7 +585,7 @@ where
 							x: cell_x,
 							y: bounds.y,
 							width: 1.0,
-							height: HEADER_HEIGHT,
+							height: header_h,
 						},
 						..renderer::Quad::default()
 					},
@@ -561,7 +596,7 @@ where
 				renderer::Quad {
 					bounds: Rectangle {
 						x: bounds.x,
-						y: bounds.y + HEADER_HEIGHT - 1.0,
+						y: bounds.y + header_h - 1.0,
 						width: bounds.width - V_SCROLLBAR_WIDTH,
 						height: 1.0,
 					},
@@ -570,16 +605,16 @@ where
 				colors::TABLE_BORDER,
 			);
 			let first_visible = (v_scroll / ROW_HEIGHT as f64).floor() as usize;
-			let visible_count = ((bounds.height - HEADER_HEIGHT) / ROW_HEIGHT).ceil() as usize + 1;
+			let visible_count = ((bounds.height - header_h) / ROW_HEIGHT).ceil() as usize + 1;
 			let loaded = self.loaded_row_count();
 			let first_visible_y = bounds.y
-				+ HEADER_HEIGHT
+				+ header_h
 				+ (first_visible as f64 * ROW_HEIGHT as f64 - v_scroll) as f32;
 			let row_num_clip = Rectangle {
 				x: bounds.x,
-				y: bounds.y + HEADER_HEIGHT,
+				y: bounds.y + header_h,
 				width: row_num_w,
-				height: bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT,
+				height: bounds.height - header_h - H_SCROLLBAR_HEIGHT,
 			};
 			renderer.with_layer(row_num_clip, |renderer| {
 				for row_offset in 0..=visible_count {
@@ -588,7 +623,7 @@ where
 						break;
 					}
 					let row_y = first_visible_y + row_offset as f32 * ROW_HEIGHT;
-					if row_y + ROW_HEIGHT < bounds.y + HEADER_HEIGHT {
+					if row_y + ROW_HEIGHT < bounds.y + header_h {
 						continue;
 					}
 					let abs_idx = self.row_offset + row_idx;
@@ -633,9 +668,9 @@ where
 			});
 			let rows_clip = Rectangle {
 				x: bounds.x + row_num_w,
-				y: bounds.y + HEADER_HEIGHT,
+				y: bounds.y + header_h,
 				width: viewport_w,
-				height: bounds.height - HEADER_HEIGHT - H_SCROLLBAR_HEIGHT,
+				height: bounds.height - header_h - H_SCROLLBAR_HEIGHT,
 			};
 			renderer.with_layer(rows_clip, |renderer| {
 				let col_widths = self.col_widths_ref(state);
@@ -645,7 +680,7 @@ where
 						break;
 					}
 					let row_y = first_visible_y + row_offset as f32 * ROW_HEIGHT;
-					if row_y + ROW_HEIGHT < bounds.y + HEADER_HEIGHT {
+					if row_y + ROW_HEIGHT < bounds.y + header_h {
 						continue;
 					}
 					let abs_idx = self.row_offset + row_idx;
@@ -787,6 +822,42 @@ fn draw_text<Renderer>(
 			bounds: cell_bounds.size(),
 			size: Pixels(FONT_SIZE),
 			font,
+			align_x: align_x.into(),
+			align_y: Vertical::Center,
+			line_height: text::LineHeight::default(),
+			shaping: text::Shaping::Basic,
+			wrapping: text::Wrapping::None,
+		},
+		Point {
+			x,
+			y: cell_bounds.y + cell_bounds.height / 2.0,
+		},
+		color,
+		cell_bounds,
+	);
+}
+
+fn draw_text_sized<Renderer>(
+	renderer: &mut Renderer,
+	content: &str,
+	cell_bounds: Rectangle,
+	color: Color,
+	font_size: f32,
+	align_x: Horizontal,
+) where
+	Renderer: renderer::Renderer + TextRenderer<Font = iced::Font>,
+{
+	let x = match align_x {
+		Horizontal::Left => cell_bounds.x,
+		Horizontal::Center => cell_bounds.x + cell_bounds.width / 2.0,
+		Horizontal::Right => cell_bounds.x + cell_bounds.width,
+	};
+	renderer.fill_text(
+		Text {
+			content: content.to_string(),
+			bounds: cell_bounds.size(),
+			size: Pixels(font_size),
+			font: iced::Font::DEFAULT,
 			align_x: align_x.into(),
 			align_y: Vertical::Center,
 			line_height: text::LineHeight::default(),

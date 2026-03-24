@@ -13,6 +13,7 @@ pub struct StartupData {
 	pub window_size: Option<(f32, f32)>,
 	pub salt: Vec<u8>,
 	pub is_password_protected: bool,
+	pub show_column_types: bool,
 }
 
 const SALT_LEN: usize = 32;
@@ -169,7 +170,7 @@ async fn open_public() -> Connection {
 
 pub async fn load_startup_data() -> StartupData {
 	let conn = open_public().await;
-	let (window_size, salt_hex, is_password_protected) = conn
+	let (window_size, salt_hex, is_password_protected, show_column_types) = conn
 		.call(|db| {
 			let get = |key: &str| -> Option<String> {
 				db.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
@@ -187,7 +188,10 @@ pub async fn load_startup_data() -> StartupData {
 			let is_password_protected = get("is_password_protected")
 				.and_then(|s| s.parse::<bool>().ok())
 				.unwrap_or(false);
-			Ok::<_, rusqlite::Error>((window_size, salt_hex, is_password_protected))
+			let show_column_types = get("show_column_types")
+				.and_then(|s| s.parse::<bool>().ok())
+				.unwrap_or(false);
+			Ok::<_, rusqlite::Error>((window_size, salt_hex, is_password_protected, show_column_types))
 		})
 		.await
 		.unwrap_or_default();
@@ -212,7 +216,22 @@ pub async fn load_startup_data() -> StartupData {
 		window_size,
 		salt,
 		is_password_protected,
+		show_column_types,
 	}
+}
+
+pub async fn save_show_column_types(val: bool) {
+	let conn = open_public().await;
+	let value = val.to_string();
+	conn.call(move |db| {
+		db.execute(
+			"INSERT OR REPLACE INTO settings (key, value) VALUES ('show_column_types', ?1)",
+			[value.as_str()],
+		)?;
+		Ok::<(), rusqlite::Error>(())
+	})
+	.await
+	.ok();
 }
 
 pub async fn save_window_size(width: f32, height: f32) {

@@ -189,6 +189,7 @@ pub fn main_screen<'a>(
 	settings_confirm_password: &'a str,
 	settings_error: &'a str,
 	is_password_protected: bool,
+	show_column_types: bool,
 ) -> Element<'a, Message> {
 	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
 		PaneType::CodeEditor => pane_grid::Content::new(center(
@@ -204,8 +205,10 @@ pub fn main_screen<'a>(
 				}),
 		))
 		.title_bar(pane_title_bar(PaneType::CodeEditor)),
-		PaneType::DataTable => pane_grid::Content::new(center(Table::new(data_frame, 0)))
-			.title_bar(pane_title_bar(PaneType::DataTable)),
+		PaneType::DataTable => pane_grid::Content::new(center(
+			Table::new(data_frame, 0).show_column_types(show_column_types),
+		))
+		.title_bar(pane_title_bar(PaneType::DataTable)),
 		PaneType::Dashboard => pane_grid::Content::new(if let Some(dashboard) = dashboard {
 			dashboard_view(dashboard)
 		} else {
@@ -274,6 +277,7 @@ pub fn main_screen<'a>(
 			settings_confirm_password,
 			settings_error,
 			is_password_protected,
+			show_column_types,
 		)
 	} else {
 		container(text("")).into()
@@ -419,7 +423,7 @@ pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection]) -> Element<'a, Mes
 				.padding([4, 8])
 				.style(bar_btn_style),
 			Menu::new(menu_items!(
-				(button(text("Password").width(Fill))
+				(button(text("Preferences").width(Fill))
 					.width(Fill)
 					.padding([4, 8])
 					.style(item_btn_style)
@@ -1555,6 +1559,7 @@ fn settings_dialog_view<'a>(
 	confirm_password: &'a str,
 	error: &'a str,
 	is_password_protected: bool,
+	show_column_types: bool,
 ) -> Element<'a, Message> {
 	let error_el: Element<Message> = if error.is_empty() {
 		space::vertical().height(24).into()
@@ -1588,13 +1593,19 @@ fn settings_dialog_view<'a>(
 	let dialog: Element<Message> = container(
 		column![
 			row![
-				text("Password Settings").size(24),
+				text("Settings").size(24),
 				space::horizontal(),
 				styled_button("✕", Message::CloseSettings, (40, 32)),
 			]
 			.align_y(Alignment::Center),
 			section(
-				"New Password",
+				"Table Display",
+				checkbox(show_column_types)
+					.label("Show column types in header")
+					.on_toggle(Message::ToggleShowColumnTypes),
+			),
+			section(
+				"Security",
 				column![
 					styled_text_input("New password", new_password)
 						.secure(true)

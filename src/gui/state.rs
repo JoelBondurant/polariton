@@ -38,6 +38,7 @@ struct AppState {
 	settings_new_password: String,
 	settings_confirm_password: String,
 	settings_error: String,
+	show_column_types: bool,
 }
 
 pub type Result = iced::Result;
@@ -107,6 +108,7 @@ fn new(startup_data: StartupData) -> (AppState, Task<Message>) {
 		settings_new_password: String::new(),
 		settings_confirm_password: String::new(),
 		settings_error: String::new(),
+		show_column_types: startup_data.show_column_types,
 	};
 	let task = if !is_password_protected {
 		Task::perform(
@@ -142,6 +144,7 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 		&app_state.settings_confirm_password,
 		&app_state.settings_error,
 		app_state.is_password_protected,
+		app_state.show_column_types,
 	)
 }
 
@@ -612,6 +615,14 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::SettingsPasswordSaved => {
 			app_state.status_msg = "Password settings saved.".to_string();
 		}
+		Message::ToggleShowColumnTypes(val) => {
+			app_state.show_column_types = val;
+			return Task::perform(
+				async move { persistence::save_show_column_types(val).await },
+				|()| Message::ShowColumnTypesSaved,
+			);
+		}
+		Message::ShowColumnTypesSaved => {}
 	}
 	Task::none()
 }
