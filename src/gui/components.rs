@@ -181,6 +181,14 @@ pub fn main_screen<'a>(
 	status_time_elapsed: Option<f64>,
 	adapter_state: &'a AdapterState,
 	saved_connections: &'a [SavedConnection],
+	showing_password_prompt: bool,
+	password_entry: &'a str,
+	password_entry_error: &'a str,
+	showing_settings: bool,
+	settings_new_password: &'a str,
+	settings_confirm_password: &'a str,
+	settings_error: &'a str,
+	is_password_protected: bool,
 ) -> Element<'a, Message> {
 	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
 		PaneType::CodeEditor => pane_grid::Content::new(center(
@@ -255,7 +263,22 @@ pub fn main_screen<'a>(
 		.width(Fill);
 	let main_window = window_decorations(column![main_content, status_bar], saved_connections);
 	let adapter_modal = adapter_view(adapter_state);
-	stack![main_window, adapter_modal].into()
+	let password_modal: Element<Message> = if showing_password_prompt {
+		password_prompt_view(password_entry, password_entry_error)
+	} else {
+		container(text("")).into()
+	};
+	let settings_modal: Element<Message> = if showing_settings {
+		settings_dialog_view(
+			settings_new_password,
+			settings_confirm_password,
+			settings_error,
+			is_password_protected,
+		)
+	} else {
+		container(text("")).into()
+	};
+	stack![main_window, adapter_modal, password_modal, settings_modal].into()
 }
 
 pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection]) -> Element<'a, Message> {
@@ -388,6 +411,21 @@ pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection]) -> Element<'a, Mes
 				(submenu_label("Export"), export_menu),
 			))
 			.width(120.0)
+			.offset(15.0)
+			.spacing(2.0)
+		),
+		(
+			button(text("Settings"))
+				.padding([4, 8])
+				.style(bar_btn_style),
+			Menu::new(menu_items!(
+				(button(text("Password").width(Fill))
+					.width(Fill)
+					.padding([4, 8])
+					.style(item_btn_style)
+					.on_press(Message::OpenSettings))
+			))
+			.width(140.0)
 			.offset(15.0)
 			.spacing(2.0)
 		)
@@ -1411,8 +1449,8 @@ pub fn adapter_view(adapter_state: &AdapterState) -> Element<'static, Message> {
 	}
 }
 
-const MODAL_FILL_PORTION_V: u16 = 80;
-const MODAL_FILL_PORTION_H: u16 = 80;
+const MODAL_FILL_PORTION_V: u16 = 30;
+const MODAL_FILL_PORTION_H: u16 = 40;
 
 fn adapter_gallery_view() -> Element<'static, Message> {
 	let dialog: Element<Message> = container(column![
@@ -1457,6 +1495,138 @@ fn adapter_gallery_view() -> Element<'static, Message> {
 			dialog,
 			space::horizontal().width(FillPortion((100 - MODAL_FILL_PORTION_H) / 2)),
 		],
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
+	]
+	.into()
+}
+
+fn password_prompt_view<'a>(password_entry: &'a str, error: &'a str) -> Element<'a, Message> {
+	let error_el: Element<Message> = if error.is_empty() {
+		space::vertical().height(24).into()
+	} else {
+		container(text(error).color(colors::DANGER).size(14))
+			.height(24)
+			.into()
+	};
+	let dialog: Element<Message> = container(
+		column![
+			row![text("Enter Password").size(24), space::horizontal()].align_y(Alignment::Center),
+			section(
+				"Password",
+				column![
+					styled_text_input("Enter password", password_entry)
+						.secure(true)
+						.on_input(Message::PasswordEntryChanged)
+						.on_submit(Message::PasswordEntrySubmit),
+					error_el,
+				]
+				.spacing(4),
+			),
+			row![
+				space::horizontal(),
+				styled_button("Unlock", Message::PasswordEntrySubmit, BUTTON_SIZE_DEFAULT),
+			]
+			.align_y(Alignment::Center),
+		]
+		.spacing(20)
+		.padding(20),
+	)
+	.width(Length::Fixed(480.0))
+	.style(|_| container::Style {
+		background: Some(colors::BG_MODAL.into()),
+		border: border::Border {
+			color: colors::BORDER_PRIMARY,
+			width: 1.0,
+			radius: 5.0.into(),
+		},
+		..Default::default()
+	})
+	.into();
+	column![
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
+		row![space::horizontal(), dialog, space::horizontal()],
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
+	]
+	.into()
+}
+
+fn settings_dialog_view<'a>(
+	new_password: &'a str,
+	confirm_password: &'a str,
+	error: &'a str,
+	is_password_protected: bool,
+) -> Element<'a, Message> {
+	let error_el: Element<Message> = if error.is_empty() {
+		space::vertical().height(24).into()
+	} else {
+		container(text(error).color(colors::DANGER).size(14))
+			.height(24)
+			.into()
+	};
+	let apply_label = if is_password_protected {
+		"Change"
+	} else {
+		"Set"
+	};
+	let mut action_row = row![
+		space::horizontal(),
+		styled_button(
+			apply_label,
+			Message::SettingsApplyPassword,
+			BUTTON_SIZE_DEFAULT
+		),
+	]
+	.spacing(10)
+	.align_y(Alignment::Center);
+	if is_password_protected {
+		action_row = action_row.push(styled_button(
+			"Remove",
+			Message::SettingsRemovePassword,
+			BUTTON_SIZE_DEFAULT,
+		));
+	}
+	let dialog: Element<Message> = container(
+		column![
+			row![
+				text("Password Settings").size(24),
+				space::horizontal(),
+				styled_button("✕", Message::CloseSettings, (40, 32)),
+			]
+			.align_y(Alignment::Center),
+			section(
+				"New Password",
+				column![
+					styled_text_input("New password", new_password)
+						.secure(true)
+						.on_input(Message::SettingsNewPasswordChanged)
+						.on_submit(Message::SettingsApplyPassword),
+					styled_text_input("Confirm password", confirm_password)
+						.secure(true)
+						.on_input(Message::SettingsConfirmPasswordChanged)
+						.on_submit(Message::SettingsApplyPassword),
+					error_el,
+				]
+				.spacing(8),
+			),
+			action_row,
+		]
+		.spacing(20)
+		.padding(20),
+	)
+	.width(Length::Fixed(520.0))
+	.style(|_| container::Style {
+		background: Some(colors::BG_MODAL.into()),
+		border: border::Border {
+			color: colors::BORDER_PRIMARY,
+			width: 1.0,
+			radius: 5.0.into(),
+		},
+		..Default::default()
+	})
+	.into();
+	column![
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
+		row![space::horizontal(), dialog, space::horizontal()],
 		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
 	]
 	.into()

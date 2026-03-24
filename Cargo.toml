@@ -8,7 +8,9 @@ description = "A strong coupling of data and visualization."
 
 
 [dependencies]
+argon2 = "0.5"
 async-trait = "0.1.89"
+chacha20poly1305 = "0.10"
 bytes = "1.11.1"
 chrono = "0.4.41"
 fontdb = "0.23.0"

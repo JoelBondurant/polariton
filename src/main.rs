@@ -5,8 +5,8 @@ mod persistence;
 mod plot;
 
 fn main() -> gui::Result {
-	let saved_window_size = tokio::runtime::Runtime::new()
-		.ok()
-		.and_then(|rt| rt.block_on(persistence::load_window_size()));
-	gui::run(saved_window_size)
+	let startup_data = tokio::runtime::Runtime::new()
+		.map(|rt| rt.block_on(persistence::load_startup_data()))
+		.unwrap_or_default();
+	gui::run(startup_data)
 }

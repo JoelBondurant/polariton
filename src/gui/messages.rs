@@ -2,7 +2,7 @@ use crate::adapters::{
 	common::{DatabaseAdapter, ExecutionResult},
 	driver::AdapterSelection,
 };
-use crate::persistence::SavedConnection;
+use crate::persistence::{PrivateDb, SavedConnection};
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::GridLineStyle;
 use crate::plot::core::PlotType;
@@ -66,6 +66,21 @@ pub enum Message {
 	LoadSavedConnection(i64),
 	EditConnection(i64),
 	DeleteConnection(i64),
+	// Private DB unlock flow
+	PrivateDbReady(PrivateDb),
+	PrivateDbError(String),
+	PasswordEntryChanged(String),
+	PasswordEntrySubmit,
+	PasswordDecryptFailed,
+	// Settings dialog (password management)
+	OpenSettings,
+	CloseSettings,
+	SettingsNewPasswordChanged(String),
+	SettingsConfirmPasswordChanged(String),
+	SettingsApplyPassword,
+	SettingsRemovePassword,
+	PrivateDbRekeyed(PrivateDb),
+	SettingsPasswordSaved,
 }
 
 #[allow(dead_code)]

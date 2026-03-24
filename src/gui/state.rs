@@ -2,7 +2,7 @@ use crate::adapters::{
 	common::{AdapterStage, ExecutionResult},
 	driver::{AdapterConfiguration, AdapterSelection, AdapterState},
 };
-use crate::persistence::{self, SavedConnection};
+use crate::persistence::{self, SavedConnection, StartupData};
 use crate::gui::{
 	components::{self, PaneType},
 	messages::{ExportFormat, Message, PlotMessage},
@@ -28,15 +28,26 @@ struct AppState {
 	is_maximized: bool,
 	saved_connections: Vec<SavedConnection>,
 	editing_connection_id: Option<i64>,
+	private_db: Option<persistence::PrivateDb>,
+	salt: Vec<u8>,
+	is_password_protected: bool,
+	showing_password_prompt: bool,
+	password_entry: String,
+	password_entry_error: String,
+	showing_settings: bool,
+	settings_new_password: String,
+	settings_confirm_password: String,
+	settings_error: String,
 }
 
 pub type Result = iced::Result;
 
-pub fn run(saved_window_size: Option<(f32, f32)>) -> Result {
-	let size = saved_window_size
+pub fn run(startup_data: StartupData) -> Result {
+	let size = startup_data
+		.window_size
 		.map(|(w, h)| Size::new(w, h))
 		.unwrap_or(Size::new(1920.0, 1080.0));
-	application(new, update, view)
+	application(move || new(startup_data.clone()), update, view)
 		.theme(components::theme())
 		.title("Polariton")
 		.font(iced_aw::ICED_AW_FONT_BYTES)
@@ -53,7 +64,7 @@ pub fn run(saved_window_size: Option<(f32, f32)>) -> Result {
 		.run()
 }
 
-fn new() -> (AppState, Task<Message>) {
+fn new(startup_data: StartupData) -> (AppState, Task<Message>) {
 	let data_frame = DataFrame::default();
 	let (mut panes, editor_pane) = pane_grid::State::new(PaneType::CodeEditor);
 	let (_data_pane, _) = panes
@@ -70,6 +81,8 @@ fn new() -> (AppState, Task<Message>) {
 	code_editor.set_theme(iced_code_editor::theme::from_iced_theme(
 		&components::theme(),
 	));
+	let is_password_protected = startup_data.is_password_protected;
+	let salt = startup_data.salt.clone();
 	let state = AppState {
 		panes,
 		dashboard: None,
@@ -84,11 +97,28 @@ fn new() -> (AppState, Task<Message>) {
 		is_maximized: false,
 		saved_connections: vec![],
 		editing_connection_id: None,
+		private_db: None,
+		salt: startup_data.salt,
+		is_password_protected,
+		showing_password_prompt: is_password_protected,
+		password_entry: String::new(),
+		password_entry_error: String::new(),
+		showing_settings: false,
+		settings_new_password: String::new(),
+		settings_confirm_password: String::new(),
+		settings_error: String::new(),
 	};
-	let task = Task::perform(
-		async { persistence::load().await },
-		Message::SavedConnectionsLoaded,
-	);
+	let task = if !is_password_protected {
+		Task::perform(
+			async move { persistence::PrivateDb::open(&salt, "").await },
+			|result| match result {
+				Ok(db) => Message::PrivateDbReady(db),
+				Err(e) => Message::PrivateDbError(e),
+			},
+		)
+	} else {
+		Task::none()
+	};
 	(state, task)
 }
 
@@ -104,6 +134,14 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 		app_state.status_time_elapsed,
 		&app_state.adapter_state,
 		&app_state.saved_connections,
+		app_state.showing_password_prompt,
+		&app_state.password_entry,
+		&app_state.password_entry_error,
+		app_state.showing_settings,
+		&app_state.settings_new_password,
+		&app_state.settings_confirm_password,
+		&app_state.settings_error,
+		app_state.is_password_protected,
 	)
 }
 
@@ -158,7 +196,8 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::DashboardPaneDragged(drag_event) => {
 			if let Some(dashboard) = &mut app_state.dashboard
-				&& let pane_grid::DragEvent::Dropped { pane, target } = drag_event {
+				&& let pane_grid::DragEvent::Dropped { pane, target } = drag_event
+			{
 				dashboard.drop(pane, target);
 			}
 		}
@@ -185,9 +224,11 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			let has_empty = crate::adapters::driver::fields_for(&app_state.adapter_state.selection)
 				.iter()
 				.any(|f| {
-					app_state.adapter_state.fields
-					.get(f.key)
-					.is_none_or(|v| v.trim().is_empty())
+					app_state
+						.adapter_state
+						.fields
+						.get(f.key)
+						.is_none_or(|v| v.trim().is_empty())
 				});
 			if has_empty {
 				app_state.status_error = "All connection fields are required.".to_string();
@@ -280,7 +321,8 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::PlotEvent(pane, plot_message) => {
 			if let Some(dashboard) = &mut app_state.dashboard
-				&& let Some(plot_state) = dashboard.get_mut(pane) {
+				&& let Some(plot_state) = dashboard.get_mut(pane)
+			{
 				match plot_message {
 					PlotMessage::RefreshData => {
 						plot_state.refresh(&app_state.data_frame);
@@ -386,13 +428,13 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				return Task::none();
 			}
 			let fields = crate::adapters::driver::fields_for(&app_state.adapter_state.selection);
-			let has_empty = fields
-				.iter()
-				.any(|f| {
-					app_state.adapter_state.fields
+			let has_empty = fields.iter().any(|f| {
+				app_state
+					.adapter_state
+					.fields
 					.get(f.key)
 					.is_none_or(|v| v.trim().is_empty())
-				});
+			});
 			if has_empty {
 				app_state.status_error = "All connection fields are required.".to_string();
 				return Task::none();
@@ -402,15 +444,19 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				.and_then(|f| app_state.adapter_state.fields.get(f.key))
 				.cloned()
 				.unwrap_or_default();
+			let Some(db) = app_state.private_db.clone() else {
+				app_state.status_error = "Database not unlocked.".to_string();
+				return Task::none();
+			};
 			if let Some(edit_id) = app_state.editing_connection_id.take() {
 				return Task::perform(
-					async move { persistence::update(edit_id, name, config_value).await },
+					async move { db.update_connection(edit_id, name, config_value).await },
 					Message::ConnectionSaved,
 				);
 			}
 			let adapter_type = app_state.adapter_state.selection.adapter_type_str().to_string();
 			return Task::perform(
-				async move { persistence::save(name, adapter_type, config_value).await },
+				async move { db.save_connection(name, adapter_type, config_value).await },
 				Message::ConnectionSaved,
 			);
 		}
@@ -447,16 +493,124 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				app_state.adapter_state.name = saved.name.clone();
 				app_state.adapter_state.selection = selection;
 				app_state.adapter_state.fields.clear();
-				app_state.adapter_state.fields.insert(field_key.to_string(), saved.config_value.clone());
+				app_state
+					.adapter_state
+					.fields
+					.insert(field_key.to_string(), saved.config_value.clone());
 				app_state.adapter_state.stage = crate::adapters::common::AdapterStage::Unconfigured;
 				app_state.editing_connection_id = Some(id);
 			}
 		}
 		Message::DeleteConnection(id) => {
+			let Some(db) = app_state.private_db.clone() else {
+				return Task::none();
+			};
 			return Task::perform(
-				async move { persistence::delete(id).await },
+				async move { db.delete_connection(id).await },
 				Message::SavedConnectionsLoaded,
 			);
+		}
+		Message::PrivateDbReady(db) => {
+			let db_clone = db.clone();
+			app_state.private_db = Some(db);
+			app_state.showing_password_prompt = false;
+			app_state.password_entry_error.clear();
+			return Task::perform(
+				async move { db_clone.load_connections().await },
+				Message::SavedConnectionsLoaded,
+			);
+		}
+		Message::PrivateDbError(e) => {
+			app_state.status_error = format!("Database error: {e}");
+		}
+		Message::PasswordEntryChanged(val) => {
+			app_state.password_entry = val;
+			app_state.password_entry_error.clear();
+		}
+		Message::PasswordEntrySubmit => {
+			let salt = app_state.salt.clone();
+			let password = app_state.password_entry.clone();
+			return Task::perform(
+				async move { persistence::PrivateDb::open(&salt, &password).await },
+				|result| match result {
+					Ok(db) => Message::PrivateDbReady(db),
+					Err(_) => Message::PasswordDecryptFailed,
+				},
+			);
+		}
+		Message::PasswordDecryptFailed => {
+			app_state.password_entry_error = "Incorrect password.".to_string();
+			app_state.password_entry.clear();
+		}
+		Message::OpenSettings => {
+			app_state.showing_settings = true;
+			app_state.settings_new_password.clear();
+			app_state.settings_confirm_password.clear();
+			app_state.settings_error.clear();
+		}
+		Message::CloseSettings => {
+			app_state.showing_settings = false;
+			app_state.settings_new_password.clear();
+			app_state.settings_confirm_password.clear();
+			app_state.settings_error.clear();
+		}
+		Message::SettingsNewPasswordChanged(val) => {
+			app_state.settings_new_password = val;
+			app_state.settings_error.clear();
+		}
+		Message::SettingsConfirmPasswordChanged(val) => {
+			app_state.settings_confirm_password = val;
+			app_state.settings_error.clear();
+		}
+		Message::SettingsApplyPassword => {
+			if app_state.settings_new_password != app_state.settings_confirm_password {
+				app_state.settings_error = "Passwords do not match.".to_string();
+				return Task::none();
+			}
+			let Some(db) = app_state.private_db.take() else {
+				app_state.settings_error = "Database not available.".to_string();
+				return Task::none();
+			};
+			let new_key = persistence::derive_key(&app_state.settings_new_password, &app_state.salt);
+			return Task::perform(
+				async move { db.rekey(new_key).await },
+				|result| match result {
+					Ok(new_db) => Message::PrivateDbRekeyed(new_db),
+					Err(e) => Message::PrivateDbError(e),
+				},
+			);
+		}
+		Message::SettingsRemovePassword => {
+			let Some(db) = app_state.private_db.take() else {
+				app_state.settings_error = "Database not available.".to_string();
+				return Task::none();
+			};
+			let empty_key = persistence::derive_key("", &app_state.salt);
+			return Task::perform(
+				async move { db.rekey(empty_key).await },
+				|result| match result {
+					Ok(new_db) => Message::PrivateDbRekeyed(new_db),
+					Err(e) => Message::PrivateDbError(e),
+				},
+			);
+		}
+		Message::PrivateDbRekeyed(new_db) => {
+			let was_remove = app_state.settings_new_password.is_empty()
+				&& app_state.settings_confirm_password.is_empty();
+			let new_is_protected = !was_remove;
+			app_state.private_db = Some(new_db);
+			app_state.is_password_protected = new_is_protected;
+			app_state.showing_settings = false;
+			app_state.settings_new_password.clear();
+			app_state.settings_confirm_password.clear();
+			app_state.settings_error.clear();
+			return Task::perform(
+				async move { persistence::save_is_password_protected(new_is_protected).await },
+				|()| Message::SettingsPasswordSaved,
+			);
+		}
+		Message::SettingsPasswordSaved => {
+			app_state.status_msg = "Password settings saved.".to_string();
 		}
 	}
 	Task::none()
@@ -481,10 +635,7 @@ fn get_pane_rects(
 					let height_a = (bounds.height - spacing) * ratio;
 					let height_b = bounds.height - spacing - height_a;
 					(
-						iced::Rectangle {
-							height: height_a,
-							..bounds
-						},
+						iced::Rectangle { height: height_a, ..bounds },
 						iced::Rectangle {
 							y: bounds.y + height_a + spacing,
 							height: height_b,
@@ -496,10 +647,7 @@ fn get_pane_rects(
 					let width_a = (bounds.width - spacing) * ratio;
 					let width_b = bounds.width - spacing - width_a;
 					(
-						iced::Rectangle {
-							width: width_a,
-							..bounds
-						},
+						iced::Rectangle { width: width_a, ..bounds },
 						iced::Rectangle {
 							x: bounds.x + width_a + spacing,
 							width: width_b,
