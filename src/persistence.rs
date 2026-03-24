@@ -25,6 +25,10 @@ async fn open() -> Connection {
 				name TEXT NOT NULL,
 				adapter_type TEXT NOT NULL,
 				config_value TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS settings (
+				key TEXT PRIMARY KEY,
+				value TEXT NOT NULL
 			)",
 		)?;
 		Ok::<(), tokio_rusqlite::rusqlite::Error>(())
@@ -32,6 +36,41 @@ async fn open() -> Connection {
 	.await
 	.unwrap();
 	conn
+}
+
+pub async fn load_window_size() -> Option<(f32, f32)> {
+	let conn = open().await;
+	conn.call(|db| {
+		let result = db
+			.query_row("SELECT value FROM settings WHERE key = 'window_size'", [], |row| {
+				row.get::<_, String>(0)
+			})
+			.ok();
+		Ok::<Option<String>, tokio_rusqlite::rusqlite::Error>(result)
+	})
+	.await
+	.ok()
+	.flatten()
+	.and_then(|s| {
+		let mut parts = s.splitn(2, ',');
+		let w = parts.next()?.parse::<f32>().ok()?;
+		let h = parts.next()?.parse::<f32>().ok()?;
+		Some((w, h))
+	})
+}
+
+pub async fn save_window_size(width: f32, height: f32) {
+	let conn = open().await;
+	let value = format!("{},{}", width, height);
+	conn.call(move |db| {
+		db.execute(
+			"INSERT OR REPLACE INTO settings (key, value) VALUES ('window_size', ?1)",
+			[value.as_str()],
+		)?;
+		Ok::<(), tokio_rusqlite::rusqlite::Error>(())
+	})
+	.await
+	.ok();
 }
 
 pub async fn load() -> Vec<SavedConnection> {

@@ -32,7 +32,10 @@ struct AppState {
 
 pub type Result = iced::Result;
 
-pub fn run() -> Result {
+pub fn run(saved_window_size: Option<(f32, f32)>) -> Result {
+	let size = saved_window_size
+		.map(|(w, h)| Size::new(w, h))
+		.unwrap_or(Size::new(1920.0, 1080.0));
 	application(new, update, view)
 		.theme(components::theme())
 		.title("Polariton")
@@ -43,7 +46,7 @@ pub fn run() -> Result {
 			min_size: Some(Size::new(1280.0, 720.0)),
 			position: window::Position::Centered,
 			resizable: true,
-			size: Size::new(1920.0, 1080.0),
+			size,
 			transparent: false,
 			..Default::default()
 		})
@@ -107,6 +110,17 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 	match message {
 		Message::CloseWindow => {
+			return window::latest().and_then(|id| {
+				window::size(id).map(Message::SaveWindowSizeAndClose)
+			});
+		}
+		Message::SaveWindowSizeAndClose(size) => {
+			return Task::perform(
+				async move { persistence::save_window_size(size.width, size.height).await },
+				|()| Message::DoCloseWindow,
+			);
+		}
+		Message::DoCloseWindow => {
 			return window::latest().and_then(window::close);
 		}
 		Message::DragWindow => {

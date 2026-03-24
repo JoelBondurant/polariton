@@ -38,6 +38,8 @@ pub enum Message {
 	AdapterConnected(Option<Arc<RwLock<dyn DatabaseAdapter>>>),
 	AdapterSelected(AdapterSelection),
 	CloseWindow,
+	SaveWindowSizeAndClose(iced::Size),
+	DoCloseWindow,
 	CodeEditEvent(EditorMessage),
 	Connect,
 	DragWindow,
