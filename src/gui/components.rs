@@ -175,7 +175,10 @@ pub fn main_screen<'a>(
 	dashboard: &'a Option<pane_grid::State<PlotState>>,
 	code_editor: &'a CodeEditor,
 	data_frame: &'a DataFrame,
-	status: &'a str,
+	status_msg: &'a str,
+	status_error: &'a str,
+	status_df_size: Option<(usize, usize)>,
+	status_time_elapsed: Option<f64>,
 	adapter_state: &'a AdapterState,
 	saved_connections: &'a [SavedConnection],
 ) -> Element<'a, Message> {
@@ -208,18 +211,48 @@ pub fn main_screen<'a>(
 	.on_drag(Message::PaneDragged)
 	.on_resize(10, Message::PaneResized);
 	let main_content = container(main_pane).padding(4).width(Fill);
-	let status_bar = container(center(
-		row![
-			text("| ").color(colors::BRAND_PURPLE),
-			text(status).color(colors::TEXT_STATUS),
-			space::horizontal(),
-			text(" |").color(colors::BRAND_PURPLE)
-		]
-		.spacing(1),
+	let status_cell_style = |_: &Theme| container::Style {
+		border: border::Border {
+			color: colors::BORDER_DIM,
+			width: 1.0,
+			radius: 3.0.into(),
+		},
+		..Default::default()
+	};
+	let time_str = status_time_elapsed
+		.map(|t| format!("{t:.3}s"))
+		.unwrap_or_default();
+	let size_str = status_df_size
+		.map(|(r, c)| format!("{r} \u{00d7} {c}"))
+		.unwrap_or_default();
+	let time_box = container(center(
+		text(time_str).color(colors::TEXT_SECONDARY).size(14),
 	))
-	.height(30)
-	.padding(1)
-	.width(Fill);
+	.width(100)
+	.height(Fill)
+	.padding([0, 4])
+	.style(status_cell_style);
+	let size_box = container(center(
+		text(size_str).color(colors::TEXT_SECONDARY).size(14),
+	))
+	.width(140)
+	.height(Fill)
+	.padding([0, 4])
+	.style(status_cell_style);
+	let msg_box = container(center(text(status_msg).color(colors::TEXT_STATUS).size(14)))
+		.width(Fill)
+		.height(Fill)
+		.padding([0, 6])
+		.style(status_cell_style);
+	let error_box = container(center(text(status_error).color(colors::DANGER).size(14)))
+		.width(Fill)
+		.height(Fill)
+		.padding([0, 6])
+		.style(status_cell_style);
+	let status_bar = container(row![time_box, size_box, msg_box, error_box].spacing(3))
+		.height(28)
+		.padding([2, 4])
+		.width(Fill);
 	let main_window = window_decorations(column![main_content, status_bar], saved_connections);
 	let adapter_modal = adapter_view(adapter_state);
 	stack![main_window, adapter_modal].into()

@@ -19,7 +19,10 @@ struct AppState {
 	dashboard: Option<pane_grid::State<PlotState>>,
 	code_editor: CodeEditor,
 	data_frame: DataFrame,
-	status: String,
+	status_msg: String,
+	status_error: String,
+	status_df_size: Option<(usize, usize)>,
+	status_time_elapsed: Option<f64>,
 	adapter_state: AdapterState,
 	code_started: Instant,
 	is_maximized: bool,
@@ -69,7 +72,10 @@ fn new() -> (AppState, Task<Message>) {
 		dashboard: None,
 		code_editor,
 		data_frame,
-		status: "".to_string(),
+		status_msg: "".to_string(),
+		status_error: "".to_string(),
+		status_df_size: None,
+		status_time_elapsed: None,
 		adapter_state: AdapterState::default(),
 		code_started: Instant::now(),
 		is_maximized: false,
@@ -89,7 +95,10 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 		&app_state.dashboard,
 		&app_state.code_editor,
 		&app_state.data_frame,
-		&app_state.status,
+		&app_state.status_msg,
+		&app_state.status_error,
+		app_state.status_df_size,
+		app_state.status_time_elapsed,
 		&app_state.adapter_state,
 		&app_state.saved_connections,
 	)
@@ -142,32 +151,36 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::Connect => match app_state.adapter_state.stage {
 			AdapterStage::None => {
 				app_state.adapter_state.stage = AdapterStage::Unselected;
-				app_state.status = "Select an adapter.".into();
+				app_state.status_msg = "Select an adapter.".into();
 			}
 			_ => {
 				app_state.adapter_state.stage = AdapterStage::None;
-				app_state.status = "No adapter selected.".into();
+				app_state.status_msg = "No adapter selected.".into();
 			}
 		},
 		Message::AdapterSelected(adapter_selection) => {
 			app_state.adapter_state.stage = AdapterStage::Unconfigured;
-			app_state.status = format!("Adapter selected: {:?}", adapter_selection);
+			app_state.status_msg = format!("Adapter selected: {:?}", adapter_selection);
 			app_state.adapter_state.selection = adapter_selection;
 		}
 		Message::AdapterConfigurationChanged(key, value) => {
 			app_state.adapter_state.fields.insert(key, value);
-			app_state.status = "Configure adapter.".into();
+			app_state.status_msg = "Configure adapter.".into();
 		}
 		Message::AdapterConfigurationSubmitted => {
 			let has_empty = crate::adapters::driver::fields_for(&app_state.adapter_state.selection)
 				.iter()
-				.any(|f| app_state.adapter_state.fields.get(f.key).map_or(true, |v| v.trim().is_empty()));
+				.any(|f| {
+					app_state.adapter_state.fields
+					.get(f.key)
+					.is_none_or(|v| v.trim().is_empty())
+				});
 			if has_empty {
-				app_state.status = "All connection fields are required.".to_string();
+				app_state.status_error = "All connection fields are required.".to_string();
 				return Task::none();
 			}
 			app_state.adapter_state.configure();
-			app_state.status = "Adapter configured.".into();
+			app_state.status_msg = "Adapter configured.".into();
 			app_state.adapter_state.stage = AdapterStage::Configured;
 			let config = app_state.adapter_state.configuration.clone();
 			return Task::perform(
@@ -178,14 +191,16 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::AdapterConnected(dba) => {
 			app_state.adapter_state.connection = dba;
 			app_state.adapter_state.stage = AdapterStage::Connected;
-			app_state.status = "Adapter connected.".into();
+			app_state.status_msg = "Adapter connected.".into();
 		}
 		Message::Run => match &mut app_state.adapter_state.connection {
 			None => {}
 			Some(db) => {
 				let code = app_state.code_editor.content();
 				let db = db.clone();
-				app_state.status = "Code running...".into();
+				app_state.status_msg = "Code running...".into();
+				app_state.status_error = "".to_string();
+				app_state.status_time_elapsed = None;
 				app_state.code_started = Instant::now();
 				return Task::perform(
 					async move {
@@ -198,32 +213,35 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		},
 		Message::RunResult(er) => {
 			let time_elapsed = (app_state.code_started.elapsed().as_millis() as f64) / 1000.0;
+			app_state.status_time_elapsed = Some(time_elapsed);
+			app_state.status_error = "".to_string();
 			match er {
 				ExecutionResult::Affected(rows_affected) => {
-					app_state.status = format!("Rows affected: {rows_affected} in {time_elapsed}s");
+					app_state.status_msg = format!("Rows affected: {rows_affected}");
 				}
 				ExecutionResult::Batch(ver) => {
 					let msg = ver
 						.into_iter()
 						.map(|er| format!("{:?}", er))
 						.collect::<String>();
-					app_state.status = format!("Batch complete {msg} in {time_elapsed}s");
+					app_state.status_msg = format!("Batch complete: {msg}");
 				}
 				ExecutionResult::CommandCompleted(msg) => {
-					app_state.status = format!("Command complete {msg} in {time_elapsed}s");
+					app_state.status_msg = format!("Command complete: {msg}");
 				}
 				ExecutionResult::Err(msg) => {
-					app_state.status = format!("Error {msg} in {time_elapsed}s");
+					app_state.status_error = format!("Error: {msg}");
+					app_state.status_msg = "".to_string();
 				}
 				ExecutionResult::Rows(df) => {
 					let rows = df.height();
 					let cols = df.width();
 					app_state.data_frame = df;
-					app_state.status =
-						format!("Code finished: {time_elapsed}s | Size: {rows} x {cols}");
+					app_state.status_df_size = Some((rows, cols));
+					app_state.status_msg = "Code finished.".to_string();
 				}
 				ExecutionResult::None => {
-					app_state.status = format!("Noop finished: {time_elapsed}s");
+					app_state.status_msg = "Noop finished.".to_string();
 				}
 			}
 		}
@@ -326,7 +344,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 					}
 				}
 				let count = export_jobs.len();
-				app_state.status = format!("Exporting {count} plots as {format}...");
+				app_state.status_msg = format!("Exporting {count} plots as {format}...");
 				return Task::perform(
 					async move {
 						tokio::task::spawn_blocking(move || {
@@ -342,7 +360,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			}
 		}
 		Message::ExportDone(count, format) => {
-			app_state.status = format!("Exported {count} plots as {format}.");
+			app_state.status_msg = format!("Exported {count} plots as {format}.");
 		}
 		Message::ConnectionNameChanged(name) => {
 			app_state.adapter_state.name = name;
@@ -350,15 +368,19 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::SaveConnection => {
 			let name = app_state.adapter_state.name.trim().to_string();
 			if name.is_empty() {
-				app_state.status = "Connection name is required.".to_string();
+				app_state.status_error = "Connection name is required.".to_string();
 				return Task::none();
 			}
 			let fields = crate::adapters::driver::fields_for(&app_state.adapter_state.selection);
 			let has_empty = fields
 				.iter()
-				.any(|f| app_state.adapter_state.fields.get(f.key).map_or(true, |v| v.trim().is_empty()));
+				.any(|f| {
+					app_state.adapter_state.fields
+					.get(f.key)
+					.is_none_or(|v| v.trim().is_empty())
+				});
 			if has_empty {
-				app_state.status = "All connection fields are required.".to_string();
+				app_state.status_error = "All connection fields are required.".to_string();
 				return Task::none();
 			}
 			let config_value = fields
@@ -380,7 +402,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::ConnectionSaved(connections) => {
 			app_state.saved_connections = connections;
-			app_state.status = "Connection saved.".to_string();
+			app_state.status_msg = "Connection saved.".to_string();
 		}
 		Message::SavedConnectionsLoaded(connections) => {
 			app_state.saved_connections = connections;
@@ -388,7 +410,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::LoadSavedConnection(id) => {
 			if let Some(saved) = app_state.saved_connections.iter().find(|c| c.id == id) {
 				let config = AdapterConfiguration::from_saved(&saved.adapter_type, &saved.config_value);
-				app_state.status = format!("Connecting to {}...", saved.name);
+				app_state.status_msg = format!("Connecting to {}...", saved.name);
 				app_state.adapter_state.stage = crate::adapters::common::AdapterStage::Configured;
 				return Task::perform(
 					async move { AdapterState::connect(config).await },
