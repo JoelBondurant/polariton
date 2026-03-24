@@ -8,6 +8,13 @@ pub struct SavedConnection {
 	pub config_value: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct SavedStatement {
+	pub id: i64,
+	pub name: String,
+	pub code: String,
+}
+
 #[derive(Clone, Default)]
 pub struct StartupData {
 	pub window_size: Option<(f32, f32)>,
@@ -301,6 +308,11 @@ impl PrivateDb {
 					name TEXT NOT NULL,
 					adapter_type TEXT NOT NULL,
 					config_value TEXT NOT NULL
+				);
+				CREATE TABLE IF NOT EXISTS statements (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT NOT NULL,
+					code TEXT NOT NULL
 				)",
 			)?;
 			Ok::<(), rusqlite::Error>(())
@@ -408,5 +420,67 @@ impl PrivateDb {
 			.ok();
 		self.persist().await.ok();
 		self.load_connections().await
+	}
+
+	pub async fn load_statements(&self) -> Vec<SavedStatement> {
+		self.conn
+			.call(|db| {
+				let mut stmt = db.prepare("SELECT id, name, code FROM statements ORDER BY id")?;
+				let rows = stmt
+					.query_map([], |row| {
+						Ok(SavedStatement {
+							id: row.get(0)?,
+							name: row.get(1)?,
+							code: row.get(2)?,
+						})
+					})?
+					.filter_map(|r| r.ok())
+					.collect();
+				Ok::<Vec<SavedStatement>, rusqlite::Error>(rows)
+			})
+			.await
+			.unwrap_or_default()
+	}
+
+	pub async fn save_statement(&self, name: String, code: String) -> Vec<SavedStatement> {
+		self.conn
+			.call(move |db| {
+				db.execute(
+					"INSERT INTO statements (name, code) VALUES (?1, ?2)",
+					(name.as_str(), code.as_str()),
+				)?;
+				Ok::<(), rusqlite::Error>(())
+			})
+			.await
+			.ok();
+		self.persist().await.ok();
+		self.load_statements().await
+	}
+
+	pub async fn update_statement(&self, id: i64, name: String, code: String) -> Vec<SavedStatement> {
+		self.conn
+			.call(move |db| {
+				db.execute(
+					"UPDATE statements SET name = ?1, code = ?2 WHERE id = ?3",
+					(name.as_str(), code.as_str(), id),
+				)?;
+				Ok::<(), rusqlite::Error>(())
+			})
+			.await
+			.ok();
+		self.persist().await.ok();
+		self.load_statements().await
+	}
+
+	pub async fn delete_statement(&self, id: i64) -> Vec<SavedStatement> {
+		self.conn
+			.call(move |db| {
+				db.execute("DELETE FROM statements WHERE id = ?1", [id])?;
+				Ok::<(), rusqlite::Error>(())
+			})
+			.await
+			.ok();
+		self.persist().await.ok();
+		self.load_statements().await
 	}
 }

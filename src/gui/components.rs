@@ -5,7 +5,7 @@ use crate::adapters::{
 use crate::gui::messages::{Message, PlotMessage};
 use crate::gui::plot_state::PlotState;
 use crate::gui::{colors, table::Table};
-use crate::persistence::SavedConnection;
+use crate::persistence::{SavedConnection, SavedStatement};
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::{GridLineStyle, PlotWidget};
 use crate::plot::core::PlotType;
@@ -181,6 +181,7 @@ pub fn main_screen<'a>(
 	status_time_elapsed: Option<f64>,
 	adapter_state: &'a AdapterState,
 	saved_connections: &'a [SavedConnection],
+	saved_statements: &'a [SavedStatement],
 	showing_password_prompt: bool,
 	password_entry: &'a str,
 	password_entry_error: &'a str,
@@ -190,6 +191,9 @@ pub fn main_screen<'a>(
 	settings_error: &'a str,
 	is_password_protected: bool,
 	show_column_types: bool,
+	showing_save_statement_dialog: bool,
+	save_statement_name: &'a str,
+	editing_statement_id: Option<i64>,
 ) -> Element<'a, Message> {
 	let main_pane = pane_grid(panes, |_id, pane_type, _is_maximized| match pane_type {
 		PaneType::CodeEditor => pane_grid::Content::new(center(
@@ -264,7 +268,7 @@ pub fn main_screen<'a>(
 		.height(28)
 		.padding([2, 4])
 		.width(Fill);
-	let main_window = window_decorations(column![main_content, status_bar], saved_connections);
+	let main_window = window_decorations(column![main_content, status_bar], saved_connections, saved_statements);
 	let adapter_modal = adapter_view(adapter_state);
 	let password_modal: Element<Message> = if showing_password_prompt {
 		password_prompt_view(password_entry, password_entry_error)
@@ -282,10 +286,15 @@ pub fn main_screen<'a>(
 	} else {
 		container(text("")).into()
 	};
-	stack![main_window, adapter_modal, password_modal, settings_modal].into()
+	let save_statement_modal: Element<Message> = if showing_save_statement_dialog {
+		save_statement_dialog_view(save_statement_name, editing_statement_id.is_some())
+	} else {
+		container(text("")).into()
+	};
+	stack![main_window, adapter_modal, password_modal, settings_modal, save_statement_modal].into()
 }
 
-pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection]) -> Element<'a, Message> {
+pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection], saved_statements: &'a [SavedStatement]) -> Element<'a, Message> {
 	use crate::gui::messages::ExportFormat;
 	use crate::plot::core::PlotType;
 	use iced::Border;
@@ -397,16 +406,60 @@ pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection]) -> Element<'a, Mes
 		),
 		(
 			button(text("Code")).padding([4, 8]).style(bar_btn_style),
-			Menu::new(menu_items!(
-				(button(text("Run").width(Fill))
-					.width(Fill)
-					.padding([4, 8])
-					.style(item_btn_style)
-					.on_press(Message::Run))
-			))
-			.width(100.0)
-			.offset(15.0)
-			.spacing(2.0)
+			{
+				let saved_statement_items: Vec<Item<'a, Message, Theme, iced::Renderer>> =
+					if saved_statements.is_empty() {
+						vec![Item::new(
+							button(text("None saved").width(Fill))
+								.width(Fill)
+								.padding([4, 8])
+								.style(item_btn_style),
+						)]
+					} else {
+						saved_statements
+							.iter()
+							.map(|stmt| {
+								let id = stmt.id;
+								Item::new(
+									row![
+										button(text(stmt.name.clone()).width(Fill))
+											.width(Fill)
+											.padding([4, 8])
+											.style(item_btn_style)
+											.on_press(Message::LoadSavedStatement(id)),
+										button(text("✎"))
+											.padding([4, 8])
+											.style(item_btn_style)
+											.on_press(Message::EditStatement(id)),
+										button(text("✕"))
+											.padding([4, 8])
+											.style(item_btn_style)
+											.on_press(Message::DeleteStatement(id)),
+									]
+									.spacing(2),
+								)
+							})
+							.collect()
+					};
+				let saved_statement_menu =
+					Menu::new(saved_statement_items).width(240.0).offset(0.0).spacing(2.0);
+				Menu::new(menu_items!(
+					(button(text("Run").width(Fill))
+						.width(Fill)
+						.padding([4, 8])
+						.style(item_btn_style)
+						.on_press(Message::Run)),
+					(button(text("Save...").width(Fill))
+						.width(Fill)
+						.padding([4, 8])
+						.style(item_btn_style)
+						.on_press(Message::OpenSaveStatementDialog)),
+					(submenu_label("Saved"), saved_statement_menu)
+				))
+				.width(160.0)
+				.offset(15.0)
+				.spacing(2.0)
+			}
 		),
 		(
 			button(text("Plot")).padding([4, 8]).style(bar_btn_style),
@@ -1268,6 +1321,7 @@ fn horizontal_rule<'a>() -> Element<'a, Message> {
 fn window_decorations<'a>(
 	underlay: impl Into<Element<'a, Message>>,
 	saved_connections: &'a [SavedConnection],
+	saved_statements: &'a [SavedStatement],
 ) -> Element<'a, Message> {
 	let resize_thin = 6;
 	let resize_thick = 60;
@@ -1305,7 +1359,7 @@ fn window_decorations<'a>(
 			],
 			column![
 				row![title_bar()],
-				row![menu_bar(saved_connections)],
+				row![menu_bar(saved_connections, saved_statements)],
 				underlay.into(),
 				row![
 					resize_area_southwest_bottom,
@@ -1530,6 +1584,48 @@ fn password_prompt_view<'a>(password_entry: &'a str, error: &'a str) -> Element<
 				space::horizontal(),
 				styled_button("Unlock", Message::PasswordEntrySubmit, BUTTON_SIZE_DEFAULT),
 			]
+			.align_y(Alignment::Center),
+		]
+		.spacing(20)
+		.padding(20),
+	)
+	.width(Length::Fixed(480.0))
+	.style(|_| container::Style {
+		background: Some(colors::BG_MODAL.into()),
+		border: border::Border {
+			color: colors::BORDER_PRIMARY,
+			width: 1.0,
+			radius: 5.0.into(),
+		},
+		..Default::default()
+	})
+	.into();
+	column![
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
+		row![space::horizontal(), dialog, space::horizontal()],
+		space::vertical().height(FillPortion((100 - MODAL_FILL_PORTION_V) / 2)),
+	]
+	.into()
+}
+
+fn save_statement_dialog_view<'a>(name: &'a str, is_editing: bool) -> Element<'a, Message> {
+	let title = if is_editing { "Update Statement" } else { "Save Statement" };
+	let btn_label = if is_editing { "Update" } else { "Save" };
+	let dialog: Element<Message> = container(
+		column![
+			row![text(title).size(24), space::horizontal()].align_y(Alignment::Center),
+			section(
+				"Name",
+				styled_text_input("Statement name", name)
+					.on_input(Message::SaveStatementNameChanged)
+					.on_submit(Message::SaveStatement),
+			),
+			row![
+				space::horizontal(),
+				styled_button("Cancel", Message::CloseSaveStatementDialog, (100, 40)),
+				styled_button(btn_label, Message::SaveStatement, BUTTON_SIZE_DEFAULT),
+			]
+			.spacing(8)
 			.align_y(Alignment::Center),
 		]
 		.spacing(20)

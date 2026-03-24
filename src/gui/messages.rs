@@ -2,7 +2,7 @@ use crate::adapters::{
 	common::{DatabaseAdapter, ExecutionResult},
 	driver::AdapterSelection,
 };
-use crate::persistence::{PrivateDb, SavedConnection};
+use crate::persistence::{PrivateDb, SavedConnection, SavedStatement};
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::GridLineStyle;
 use crate::plot::core::PlotType;
@@ -38,6 +38,7 @@ pub enum Message {
 	AdapterSelected(AdapterSelection),
 	AddPlot(PlotType),
 	ClosePlot(pane_grid::Pane),
+	CloseSaveStatementDialog,
 	CloseSettings,
 	CloseWindow,
 	CodeEditEvent(EditorMessage),
@@ -47,15 +48,19 @@ pub enum Message {
 	DashboardPaneDragged(pane_grid::DragEvent),
 	DashboardPaneResized(pane_grid::ResizeEvent),
 	DeleteConnection(i64),
+	DeleteStatement(i64),
 	DoCloseWindow,
 	DragWindow,
 	EditConnection(i64),
+	EditStatement(i64),
 	Export(ExportFormat),
 	ExportDone(usize, ExportFormat),
 	ExportWithWindowSize(ExportFormat, Option<iced::Size>),
 	LoadSavedConnection(i64),
+	LoadSavedStatement(i64),
 	MaximizeWindow,
 	MinimizeWindow,
+	OpenSaveStatementDialog,
 	OpenSettings,
 	PaneDragged(pane_grid::DragEvent),
 	PaneResized(pane_grid::ResizeEvent),
@@ -70,14 +75,18 @@ pub enum Message {
 	Run,
 	RunResult(ExecutionResult),
 	SaveConnection,
+	SaveStatement,
+	SaveStatementNameChanged(String),
 	SaveWindowSizeAndClose(iced::Size),
 	SavedConnectionsLoaded(Vec<SavedConnection>),
+	SavedStatementsLoaded(Vec<SavedStatement>),
 	SettingsApplyPassword,
 	SettingsConfirmPasswordChanged(String),
 	SettingsNewPasswordChanged(String),
 	SettingsPasswordSaved,
 	SettingsRemovePassword,
 	ShowColumnTypesSaved,
+	StatementSaved(Vec<SavedStatement>),
 	ToggleShowColumnTypes(bool),
 }
 

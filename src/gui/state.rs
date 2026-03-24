@@ -2,7 +2,7 @@ use crate::adapters::{
 	common::{AdapterStage, ExecutionResult},
 	driver::{AdapterConfiguration, AdapterSelection, AdapterState},
 };
-use crate::persistence::{self, SavedConnection, StartupData};
+use crate::persistence::{self, SavedConnection, SavedStatement, StartupData};
 use crate::gui::{
 	components::{self, PaneType},
 	messages::{ExportFormat, Message, PlotMessage},
@@ -28,6 +28,10 @@ struct AppState {
 	is_maximized: bool,
 	saved_connections: Vec<SavedConnection>,
 	editing_connection_id: Option<i64>,
+	saved_statements: Vec<SavedStatement>,
+	showing_save_statement_dialog: bool,
+	save_statement_name: String,
+	editing_statement_id: Option<i64>,
 	private_db: Option<persistence::PrivateDb>,
 	salt: Vec<u8>,
 	is_password_protected: bool,
@@ -98,6 +102,10 @@ fn new(startup_data: StartupData) -> (AppState, Task<Message>) {
 		is_maximized: false,
 		saved_connections: vec![],
 		editing_connection_id: None,
+		saved_statements: vec![],
+		showing_save_statement_dialog: false,
+		save_statement_name: String::new(),
+		editing_statement_id: None,
 		private_db: None,
 		salt: startup_data.salt,
 		is_password_protected,
@@ -136,6 +144,7 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 		app_state.status_time_elapsed,
 		&app_state.adapter_state,
 		&app_state.saved_connections,
+		&app_state.saved_statements,
 		app_state.showing_password_prompt,
 		&app_state.password_entry,
 		&app_state.password_entry_error,
@@ -145,6 +154,9 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 		&app_state.settings_error,
 		app_state.is_password_protected,
 		app_state.show_column_types,
+		app_state.showing_save_statement_dialog,
+		&app_state.save_statement_name,
+		app_state.editing_statement_id,
 	)
 }
 
@@ -515,12 +527,88 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::PrivateDbReady(db) => {
 			let db_clone = db.clone();
+			let db_clone2 = db.clone();
 			app_state.private_db = Some(db);
 			app_state.showing_password_prompt = false;
 			app_state.password_entry_error.clear();
+			return Task::batch([
+				Task::perform(
+					async move { db_clone.load_connections().await },
+					Message::SavedConnectionsLoaded,
+				),
+				Task::perform(
+					async move { db_clone2.load_statements().await },
+					Message::SavedStatementsLoaded,
+				),
+			]);
+		}
+		Message::OpenSaveStatementDialog => {
+			app_state.showing_save_statement_dialog = true;
+			app_state.save_statement_name.clear();
+			app_state.editing_statement_id = None;
+		}
+		Message::CloseSaveStatementDialog => {
+			app_state.showing_save_statement_dialog = false;
+			app_state.save_statement_name.clear();
+			app_state.editing_statement_id = None;
+		}
+		Message::SaveStatementNameChanged(val) => {
+			app_state.save_statement_name = val;
+		}
+		Message::SaveStatement => {
+			let name = app_state.save_statement_name.trim().to_string();
+			if name.is_empty() {
+				return Task::none();
+			}
+			let code = app_state.code_editor.content();
+			let Some(db) = app_state.private_db.clone() else {
+				app_state.status_error = "Database not unlocked.".to_string();
+				return Task::none();
+			};
+			app_state.showing_save_statement_dialog = false;
+			if let Some(id) = app_state.editing_statement_id.take() {
+				return Task::perform(
+					async move { db.update_statement(id, name, code).await },
+					Message::StatementSaved,
+				);
+			}
 			return Task::perform(
-				async move { db_clone.load_connections().await },
-				Message::SavedConnectionsLoaded,
+				async move { db.save_statement(name, code).await },
+				Message::StatementSaved,
+			);
+		}
+		Message::StatementSaved(statements) => {
+			app_state.saved_statements = statements;
+			app_state.save_statement_name.clear();
+			app_state.status_msg = "Statement saved.".to_string();
+		}
+		Message::SavedStatementsLoaded(statements) => {
+			app_state.saved_statements = statements;
+		}
+		Message::LoadSavedStatement(id) => {
+			if let Some(stmt) = app_state.saved_statements.iter().find(|s| s.id == id) {
+				let mut new_editor = CodeEditor::new(&stmt.code, "sql");
+				new_editor.set_theme(iced_code_editor::theme::from_iced_theme(
+					&components::theme(),
+				));
+				app_state.code_editor = new_editor;
+				app_state.status_msg = format!("Statement '{}' loaded.", stmt.name);
+			}
+		}
+		Message::EditStatement(id) => {
+			if let Some(stmt) = app_state.saved_statements.iter().find(|s| s.id == id) {
+				app_state.editing_statement_id = Some(id);
+				app_state.save_statement_name = stmt.name.clone();
+				app_state.showing_save_statement_dialog = true;
+			}
+		}
+		Message::DeleteStatement(id) => {
+			let Some(db) = app_state.private_db.clone() else {
+				return Task::none();
+			};
+			return Task::perform(
+				async move { db.delete_statement(id).await },
+				Message::SavedStatementsLoaded,
 			);
 		}
 		Message::PrivateDbError(e) => {
