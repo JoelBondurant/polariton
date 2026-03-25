@@ -210,6 +210,37 @@ impl<'a> Table<'a> {
 		}
 	}
 
+	fn hit_test_cell(
+		&self,
+		state: &TableState,
+		bounds: Rectangle,
+		pos: Point,
+		row_num_w: f32,
+	) -> Option<(usize, usize)> {
+		let header_h = self.header_height();
+		let data_top = bounds.y + header_h;
+		let data_bottom = bounds.y + bounds.height - H_SCROLLBAR_HEIGHT;
+		let data_left = bounds.x + row_num_w;
+		let data_right = bounds.x + bounds.width - V_SCROLLBAR_WIDTH;
+		if pos.y < data_top || pos.y >= data_bottom || pos.x < data_left || pos.x >= data_right {
+			return None;
+		}
+		let content_y = pos.y - data_top + state.v_scroll_offset as f32;
+		let row_idx = (content_y / ROW_HEIGHT).floor() as usize;
+		if row_idx >= self.loaded_row_count() {
+			return None;
+		}
+		let content_x = pos.x - data_left + state.h_scroll_offset as f32;
+		let mut x_acc = 0.0f32;
+		for (col_idx, &w) in state.col_widths.iter().enumerate() {
+			if content_x >= x_acc && content_x < x_acc + w {
+				return Some((col_idx, row_idx));
+			}
+			x_acc += w;
+		}
+		None
+	}
+
 	fn v_scrollbar_thumb_rect(&self, bounds: Rectangle, v_scroll_offset: f64) -> Rectangle {
 		let total_h = self.total_content_height();
 		let track_h = bounds.height - self.header_height() - H_SCROLLBAR_HEIGHT;
@@ -231,6 +262,26 @@ impl<'a> Table<'a> {
 	}
 }
 
+struct TableSelection {
+	anchor: (usize, usize),
+	active: (usize, usize),
+}
+
+impl TableSelection {
+	fn range(&self) -> (usize, usize, usize, usize) {
+		let min_col = self.anchor.0.min(self.active.0);
+		let max_col = self.anchor.0.max(self.active.0);
+		let min_row = self.anchor.1.min(self.active.1);
+		let max_row = self.anchor.1.max(self.active.1);
+		(min_col, max_col, min_row, max_row)
+	}
+
+	fn contains(&self, col: usize, row: usize) -> bool {
+		let (min_col, max_col, min_row, max_row) = self.range();
+		col >= min_col && col <= max_col && row >= min_row && row <= max_row
+	}
+}
+
 #[derive(Default)]
 pub struct TableState {
 	col_widths: Vec<f32>,
@@ -245,6 +296,9 @@ pub struct TableState {
 	v_drag_start_y: f32,
 	v_dragging_scrollbar: bool,
 	v_scroll_offset: f64,
+	selection: Option<TableSelection>,
+	is_selecting: bool,
+	modifiers: keyboard::Modifiers,
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Table<'_>
@@ -337,6 +391,23 @@ where
 						state.h_drag_start_x = pos.x;
 						state.h_drag_start_offset = state.h_scroll_offset;
 						shell.request_redraw();
+					} else if let Some(cell) =
+						self.hit_test_cell(state, bounds, pos, row_num_w)
+					{
+						let extend = state.modifiers.shift();
+						if extend && let Some(sel) = &mut state.selection {
+							sel.active = cell;
+						} else {
+							state.selection = Some(TableSelection {
+								anchor: cell,
+								active: cell,
+							});
+						}
+						state.is_selecting = true;
+						shell.request_redraw();
+					} else if state.selection.is_some() {
+							state.selection = None;
+							shell.request_redraw();
 					}
 				}
 			}
@@ -367,6 +438,12 @@ where
 						+ scroll_ratio * max_h_scroll)
 						.clamp(0.0, max_h_scroll);
 					shell.request_redraw();
+				} else if state.is_selecting
+					&& let Some(cell) = self.hit_test_cell(state, bounds, *position, row_num_w)
+					&& let Some(sel) = &mut state.selection
+					&& sel.active != cell {
+							sel.active = cell;
+							shell.request_redraw();
 				}
 			}
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
@@ -377,6 +454,8 @@ where
 					state.v_dragging_scrollbar = false;
 					state.h_dragging_scrollbar = false;
 					shell.request_redraw();
+				} else if state.is_selecting {
+					state.is_selecting = false;
 				}
 			}
 			Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
@@ -404,7 +483,9 @@ where
 				}
 				shell.request_redraw();
 			}
-			Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) if cursor.is_over(bounds) => {
+			Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
+				if cursor.is_over(bounds) =>
+			{
 				let page_size = (viewport_h - self.header_height()) as f64;
 				match key {
 					keyboard::Key::Named(keyboard::key::Named::PageDown) => {
@@ -437,9 +518,37 @@ where
 						state.h_scroll_offset =
 							(state.h_scroll_offset - MIN_COL_WIDTH as f64).clamp(0.0, max_h_scroll);
 					}
+					keyboard::Key::Character(c)
+						if c.as_str() == "c" && modifiers.control() =>
+					{
+						if let Some(sel) = &state.selection {
+							let (min_col, max_col, min_row, max_row) = sel.range();
+							let mut out = String::new();
+							for row in min_row..=max_row {
+								for col in min_col..=max_col {
+									if col > min_col {
+										out.push('\t');
+									}
+									out.push_str(&self.cell_str(col, row));
+								}
+								out.push('\n');
+							}
+							use iced::advanced::clipboard::Kind;
+							_clipboard.write(Kind::Standard, out);
+						}
+					}
+					keyboard::Key::Named(keyboard::key::Named::Escape) => {
+						if state.selection.is_some() {
+							state.selection = None;
+							shell.request_redraw();
+						}
+					}
 					_ => {}
 				}
 				shell.request_redraw();
+			}
+			Event::Keyboard(keyboard::Event::ModifiersChanged(mods)) => {
+				state.modifiers = *mods;
 			}
 			_ => {}
 		}
@@ -731,6 +840,24 @@ where
 										..renderer::Quad::default()
 									},
 									colors::TABLE_BORDER,
+								);
+							}
+							if state
+								.selection
+								.as_ref()
+								.is_some_and(|s| s.contains(col_idx, row_idx))
+							{
+								renderer.fill_quad(
+									renderer::Quad {
+										bounds: Rectangle {
+											x: cell_x,
+											y: row_y,
+											width: col_w,
+											height: ROW_HEIGHT,
+										},
+										..renderer::Quad::default()
+									},
+									colors::TABLE_SELECTION,
 								);
 							}
 							let text = self.cell_str(col_idx, row_idx);
