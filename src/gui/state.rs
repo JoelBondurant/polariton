@@ -9,7 +9,7 @@ use crate::gui::{
 	plot_state::PlotState,
 };
 use crate::plot::export::{AvifBackend, PngBackend, SvgBackend};
-use iced::{application, widget::pane_grid, window, Element, Size, Task};
+use iced::{application, event, keyboard, widget::pane_grid, window, Element, Size, Subscription, Task};
 use iced_code_editor::CodeEditor;
 use polars::frame::DataFrame;
 use std::time::Instant;
@@ -47,12 +47,24 @@ struct AppState {
 
 pub type Result = iced::Result;
 
+fn subscription(_state: &AppState) -> Subscription<Message> {
+	event::listen_with(|ev, _status, _window| match ev {
+		event::Event::Keyboard(keyboard::Event::KeyPressed {
+			key: keyboard::Key::Named(keyboard::key::Named::Enter),
+			modifiers,
+			..
+		}) if modifiers.control() => Some(Message::Run),
+		_ => None,
+	})
+}
+
 pub fn run(startup_data: StartupData) -> Result {
 	let size = startup_data
 		.window_size
 		.map(|(w, h)| Size::new(w, h))
 		.unwrap_or(Size::new(1920.0, 1080.0));
 	application(move || new(startup_data.clone()), update, view)
+		.subscription(subscription)
 		.theme(components::theme())
 		.title("Polariton")
 		.font(iced_aw::ICED_AW_FONT_BYTES)

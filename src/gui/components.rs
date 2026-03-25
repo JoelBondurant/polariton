@@ -444,7 +444,7 @@ pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection], saved_statements: 
 				let saved_statement_menu =
 					Menu::new(saved_statement_items).width(240.0).offset(0.0).spacing(2.0);
 				Menu::new(menu_items!(
-					(button(text("Run").width(Fill))
+					(button(text("Run  (Ctrl+Enter)").width(Fill))
 						.width(Fill)
 						.padding([4, 8])
 						.style(item_btn_style)
