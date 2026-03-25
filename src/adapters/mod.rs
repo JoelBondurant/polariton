@@ -1,3 +1,4 @@
+pub mod bigquery;
 pub mod common;
 pub mod driver;
 pub mod parquet;

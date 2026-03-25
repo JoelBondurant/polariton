@@ -1,7 +1,9 @@
 use crate::adapters::{
+	bigquery,
 	common::{AdapterField, AdapterStage, DatabaseAdapter},
 	parquet, postgres, sqlite,
 };
+use gcloud_bigquery::client::{Client, ClientConfig};
 use polars::prelude::{HiveOptions, LazyFrame, PlRefPath, ScanArgsParquet};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 use tokio::sync::RwLock;
@@ -11,6 +13,7 @@ use tokio_rusqlite::Connection as AsyncConnection;
 pub enum AdapterSelection {
 	#[default]
 	None,
+	BigQuery,
 	Parquet,
 	Postgres,
 	SQLite,
@@ -20,6 +23,7 @@ impl AdapterSelection {
 	pub fn adapter_type_str(&self) -> &str {
 		match self {
 			AdapterSelection::None => "None",
+			AdapterSelection::BigQuery => "BigQuery",
 			AdapterSelection::Parquet => "Parquet",
 			AdapterSelection::Postgres => "Postgres",
 			AdapterSelection::SQLite => "SQLite",
@@ -31,6 +35,9 @@ impl AdapterSelection {
 pub enum AdapterConfiguration {
 	#[default]
 	None,
+	BigQuery {
+		project_id: String,
+	},
 	Parquet {
 		input_path: String,
 	},
@@ -55,6 +62,9 @@ pub struct AdapterState {
 impl AdapterConfiguration {
 	pub fn from_saved(adapter_type: &str, config_value: &str) -> Self {
 		match adapter_type {
+			"BigQuery" => AdapterConfiguration::BigQuery {
+				project_id: config_value.to_string(),
+			},
 			"Parquet" => AdapterConfiguration::Parquet {
 				input_path: config_value.to_string(),
 			},
@@ -75,6 +85,11 @@ impl AdapterState {
 			AdapterSelection::None => {
 				self.configuration = AdapterConfiguration::None;
 				self.stage = AdapterStage::Unconfigured;
+			}
+			AdapterSelection::BigQuery => {
+				let project_id = self.fields.get("project_id").cloned().unwrap_or_default();
+				self.configuration = AdapterConfiguration::BigQuery { project_id };
+				self.stage = AdapterStage::Configured;
 			}
 			AdapterSelection::Parquet => {
 				let input_path = self.fields.get("input_path").unwrap().clone();
@@ -105,6 +120,16 @@ impl AdapterState {
 	pub async fn connect(config: AdapterConfiguration) -> Option<Arc<RwLock<dyn DatabaseAdapter>>> {
 		match config {
 			AdapterConfiguration::None => None,
+			AdapterConfiguration::BigQuery { project_id } => {
+				let (bq_config, _detected_project) = match ClientConfig::new_with_auth().await {
+					Ok(res) => res,
+					Err(_) => return None,
+				};
+				match Client::new(bq_config).await {
+					Ok(client) => Some(Arc::new(RwLock::new(bigquery::BigQueryAdapter { client, project_id }))),
+					Err(_) => None,
+				}
+			}
 			AdapterConfiguration::Parquet { input_path } => {
 				let input_path = Path::new(&input_path);
 				let input_ref_path = PlRefPath::try_from_path(input_path).unwrap();
@@ -170,6 +195,7 @@ impl AdapterState {
 pub fn fields_for(selection: &AdapterSelection) -> &'static [AdapterField] {
 	match selection {
 		AdapterSelection::None => &[],
+		AdapterSelection::BigQuery => bigquery::FIELDS,
 		AdapterSelection::Parquet => parquet::FIELDS,
 		AdapterSelection::Postgres => postgres::FIELDS,
 		AdapterSelection::SQLite => sqlite::FIELDS,

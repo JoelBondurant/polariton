@@ -1516,6 +1516,11 @@ fn adapter_gallery_view() -> Element<'static, Message> {
 		center(
 			row![
 				styled_button(
+					"BigQuery",
+					Message::AdapterSelected(AdapterSelection::BigQuery),
+					BUTTON_SIZE_DEFAULT
+				),
+				styled_button(
 					"Parquet",
 					Message::AdapterSelected(AdapterSelection::Parquet),
 					BUTTON_SIZE_DEFAULT
@@ -1743,6 +1748,7 @@ pub fn adapter_configuration_view(adapter_state: &AdapterState) -> Element<'stat
 	let name = adapter_state.name.clone();
 	let adapter_label = match &adapter_state.selection {
 		AdapterSelection::None => "None",
+		AdapterSelection::BigQuery => "BigQuery",
 		AdapterSelection::Parquet => "Parquet",
 		AdapterSelection::Postgres => "Postgres",
 		AdapterSelection::SQLite => "SQLite",
