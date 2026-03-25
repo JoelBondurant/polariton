@@ -1,11 +1,11 @@
 use crate::adapters::{
 	bigquery,
 	common::{AdapterField, AdapterStage, DatabaseAdapter},
-	parquet, postgres, sqlite,
+	mysql, parquet, postgres, sqlite,
 };
 use gcloud_bigquery::client::{Client, ClientConfig};
 use polars::prelude::{HiveOptions, LazyFrame, PlRefPath, ScanArgsParquet};
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tokio_rusqlite::Connection as AsyncConnection;
 
@@ -14,6 +14,7 @@ pub enum AdapterSelection {
 	#[default]
 	None,
 	BigQuery,
+	MySQL,
 	Parquet,
 	Postgres,
 	SQLite,
@@ -24,6 +25,7 @@ impl AdapterSelection {
 		match self {
 			AdapterSelection::None => "None",
 			AdapterSelection::BigQuery => "BigQuery",
+			AdapterSelection::MySQL => "MySQL",
 			AdapterSelection::Parquet => "Parquet",
 			AdapterSelection::Postgres => "Postgres",
 			AdapterSelection::SQLite => "SQLite",
@@ -37,6 +39,9 @@ pub enum AdapterConfiguration {
 	None,
 	BigQuery {
 		project_id: String,
+	},
+	MySQL {
+		connection_string: String,
 	},
 	Parquet {
 		input_path: String,
@@ -65,6 +70,9 @@ impl AdapterConfiguration {
 			"BigQuery" => AdapterConfiguration::BigQuery {
 				project_id: config_value.to_string(),
 			},
+			"MySQL" => AdapterConfiguration::MySQL {
+				connection_string: config_value.to_string(),
+			},
 			"Parquet" => AdapterConfiguration::Parquet {
 				input_path: config_value.to_string(),
 			},
@@ -85,6 +93,15 @@ impl AdapterState {
 			AdapterSelection::None => {
 				self.configuration = AdapterConfiguration::None;
 				self.stage = AdapterStage::Unconfigured;
+			}
+			AdapterSelection::MySQL => {
+				let connection_string = self
+					.fields
+					.get("connection_string")
+					.unwrap_or(&"mysql://root@localhost/mydb".to_string())
+					.clone();
+				self.configuration = AdapterConfiguration::MySQL { connection_string };
+				self.stage = AdapterStage::Configured;
 			}
 			AdapterSelection::BigQuery => {
 				let project_id = self.fields.get("project_id").cloned().unwrap_or_default();
@@ -120,13 +137,37 @@ impl AdapterState {
 	pub async fn connect(config: AdapterConfiguration) -> Option<Arc<RwLock<dyn DatabaseAdapter>>> {
 		match config {
 			AdapterConfiguration::None => None,
+			AdapterConfiguration::MySQL { connection_string } => {
+				let opts = match mysql_async::Opts::from_url(&connection_string) {
+					Ok(o) => o,
+					Err(err) => {
+						eprintln!("MySQL URL parse error: {err}");
+						return None;
+					}
+				};
+				let pool = mysql_async::Pool::new(opts);
+				match tokio::time::timeout(Duration::from_secs(10), pool.get_conn()).await {
+					Ok(Ok(_conn)) => Some(Arc::new(RwLock::new(mysql::MySQLAdapter { pool }))),
+					Ok(Err(err)) => {
+						eprintln!("MySQL connection error: {err}");
+						None
+					}
+					Err(_elapsed) => {
+						eprintln!("MySQL connection timed out after 10s");
+						None
+					}
+				}
+			}
 			AdapterConfiguration::BigQuery { project_id } => {
 				let (bq_config, _detected_project) = match ClientConfig::new_with_auth().await {
 					Ok(res) => res,
 					Err(_) => return None,
 				};
 				match Client::new(bq_config).await {
-					Ok(client) => Some(Arc::new(RwLock::new(bigquery::BigQueryAdapter { client, project_id }))),
+					Ok(client) => Some(Arc::new(RwLock::new(bigquery::BigQueryAdapter {
+						client,
+						project_id,
+					}))),
 					Err(_) => None,
 				}
 			}
@@ -196,6 +237,7 @@ pub fn fields_for(selection: &AdapterSelection) -> &'static [AdapterField] {
 	match selection {
 		AdapterSelection::None => &[],
 		AdapterSelection::BigQuery => bigquery::FIELDS,
+		AdapterSelection::MySQL => mysql::FIELDS,
 		AdapterSelection::Parquet => parquet::FIELDS,
 		AdapterSelection::Postgres => postgres::FIELDS,
 		AdapterSelection::SQLite => sqlite::FIELDS,

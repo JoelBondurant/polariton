@@ -1300,7 +1300,7 @@ fn section<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> Elem
 }
 
 fn field<'a>(label: &'a str, widget: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-	row![text(label).width(Length::Fixed(120.0)), widget.into()]
+	row![text(label).width(Length::Fixed(160.0)), widget.into()]
 		.spacing(10)
 		.align_y(Alignment::Center)
 		.into()
@@ -1518,6 +1518,11 @@ fn adapter_gallery_view() -> Element<'static, Message> {
 				styled_button(
 					"BigQuery",
 					Message::AdapterSelected(AdapterSelection::BigQuery),
+					BUTTON_SIZE_DEFAULT
+				),
+				styled_button(
+					"MySQL",
+					Message::AdapterSelected(AdapterSelection::MySQL),
 					BUTTON_SIZE_DEFAULT
 				),
 				styled_button(
@@ -1749,6 +1754,7 @@ pub fn adapter_configuration_view(adapter_state: &AdapterState) -> Element<'stat
 	let adapter_label = match &adapter_state.selection {
 		AdapterSelection::None => "None",
 		AdapterSelection::BigQuery => "BigQuery",
+		AdapterSelection::MySQL => "MySQL",
 		AdapterSelection::Parquet => "Parquet",
 		AdapterSelection::Postgres => "Postgres",
 		AdapterSelection::SQLite => "SQLite",

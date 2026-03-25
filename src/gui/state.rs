@@ -259,9 +259,14 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			);
 		}
 		Message::AdapterConnected(dba) => {
+			let ok = dba.is_some();
 			app_state.adapter_state.connection = dba;
 			app_state.adapter_state.stage = AdapterStage::Connected;
-			app_state.status_msg = "Adapter connected.".into();
+			app_state.status_msg = if ok {
+				"Adapter connected.".into()
+			} else {
+				"Adapter connection failed.".into()
+			};
 		}
 		Message::Run => match &mut app_state.adapter_state.connection {
 			None => {}
