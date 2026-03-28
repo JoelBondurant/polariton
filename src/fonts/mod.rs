@@ -1,3 +1,3 @@
 mod core;
 
-pub use core::{DEJAVU_SANS_MONO, MENU_FONT};
+pub use core::MENU_FONT;

@@ -1,3 +1,5 @@
+use crate::editor::highlight::SyntaxLanguage;
+use crate::editor::{CodeEditor, DEJAVU_SANS_MONO};
 use crate::adapters::{
 	common::{AdapterStage, ExecutionResult},
 	driver::{AdapterConfiguration, AdapterSelection, AdapterState},
@@ -9,10 +11,8 @@ use crate::gui::{
 	messages::{ExportFormat, Message, PlotMessage},
 	plot_state::{PlotState, create_plot},
 };
-use crate::fonts::DEJAVU_SANS_MONO;
 use crate::plot::export::{AvifBackend, PngBackend, SvgBackend};
 use iced::{application, event, keyboard, time, widget::pane_grid, window, Element, Size, Subscription, Task};
-use iced_code_editor::CodeEditor;
 use polars::frame::DataFrame;
 use std::time::{Duration, Instant};
 
@@ -82,7 +82,11 @@ fn subscription(state: &AppState) -> Subscription<Message> {
 	} else {
 		Subscription::none()
 	};
-	Subscription::batch([events, resize_tick])
+	Subscription::batch([
+		events,
+		resize_tick,
+		state.code_editor.subscription().map(Message::CodeEditEvent),
+	])
 }
 
 pub fn run(startup_data: StartupData) -> Result {
@@ -121,10 +125,7 @@ fn new(startup_data: StartupData) -> (AppState, Task<Message>) {
 	let _ = panes
 		.split(pane_grid::Axis::Vertical, editor_pane, PaneType::Dashboard)
 		.unwrap();
-	let mut code_editor = CodeEditor::new("", "sql");
-	code_editor.set_theme(iced_code_editor::theme::from_iced_theme(
-		&components::theme(),
-	));
+	let code_editor = CodeEditor::new("", SyntaxLanguage::Sql);
 	let is_password_protected = startup_data.is_password_protected;
 	let salt = startup_data.salt.clone();
 	let state = AppState {
@@ -231,7 +232,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::CodeEditEvent(edit_event) => {
 			return app_state
 				.code_editor
-				.update(&edit_event)
+				.update(edit_event)
 				.map(Message::CodeEditEvent);
 		}
 		Message::MaximizeWindow => {
@@ -729,10 +730,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::LoadSavedStatement(id) => {
 			if let Some(stmt) = app_state.saved_statements.iter().find(|s| s.id == id) {
-				let mut new_editor = CodeEditor::new(&stmt.code, "sql");
-				new_editor.set_theme(iced_code_editor::theme::from_iced_theme(
-					&components::theme(),
-				));
+				let new_editor = CodeEditor::new(&stmt.code, SyntaxLanguage::Sql);
 				app_state.code_editor = new_editor;
 				app_state.status_msg = format!("Statement '{}' loaded.", stmt.name);
 			}

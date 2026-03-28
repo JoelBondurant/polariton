@@ -1,4 +1,5 @@
 use super::menu;
+use crate::editor::EditorMsg;
 use crate::adapters::{
 	common::{DatabaseAdapter, ExecutionResult},
 	driver::AdapterSelection,
@@ -10,7 +11,6 @@ use crate::plot::common::PlotKernel;
 use crate::plot::core::PlotType;
 use iced::{widget::pane_grid, window};
 use iced::{Color, Rectangle};
-use iced_code_editor::Message as EditorMessage;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -44,7 +44,7 @@ pub enum Message {
 	CloseSaveStatementDialog,
 	CloseSettings,
 	CloseWindow,
-	CodeEditEvent(EditorMessage),
+	CodeEditEvent(EditorMsg),
 	Connect,
 	ConnectionNameChanged(String),
 	ConnectionSaved(Vec<SavedConnection>),

@@ -1,5 +1,6 @@
 mod adapters;
 mod core;
+mod editor;
 mod fonts;
 mod gui;
 mod persistence;

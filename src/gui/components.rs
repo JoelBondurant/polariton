@@ -2,6 +2,7 @@ use crate::adapters::{
 	common::{AdapterFieldType, AdapterStage},
 	driver::{fields_for, AdapterSelection, AdapterState},
 };
+use crate::editor::CodeEditor;
 use crate::gui::messages::{Message, PlotMessage};
 use crate::gui::plot_state::PlotState;
 use crate::gui::{
@@ -23,7 +24,6 @@ use iced::{
 	window::Direction,
 	Alignment, Background, Center, Color, Element, Fill, FillPortion, Font, Length,
 };
-use iced_code_editor::CodeEditor;
 use polars::frame::DataFrame;
 
 pub const BUTTON_SIZE_DEFAULT: (u32, u32) = (120, 40);
