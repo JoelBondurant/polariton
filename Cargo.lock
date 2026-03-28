@@ -5155,7 +5155,6 @@ dependencies = [
  "gcloud-googleapis",
  "iced",
  "iced-code-editor",
- "iced_aw",
  "kurbo 0.13.0",
  "mysql_async",
  "png",

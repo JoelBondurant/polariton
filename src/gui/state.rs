@@ -4,10 +4,12 @@ use crate::adapters::{
 };
 use crate::persistence::{self, SavedConnection, SavedStatement, StartupData};
 use crate::gui::{
+	menu::MenuState,
 	components::{self, PaneType},
 	messages::{ExportFormat, Message, PlotMessage},
 	plot_state::{PlotState, create_plot},
 };
+use crate::fonts::DEJAVU_SANS_MONO;
 use crate::plot::export::{AvifBackend, PngBackend, SvgBackend};
 use iced::{application, event, keyboard, time, widget::pane_grid, window, Element, Size, Subscription, Task};
 use iced_code_editor::CodeEditor;
@@ -17,6 +19,7 @@ use std::time::{Duration, Instant};
 struct AppState {
 	panes: pane_grid::State<PaneType>,
 	dashboard: Option<pane_grid::State<PlotState>>,
+	menu_state: MenuState,
 	code_editor: CodeEditor,
 	data_frame: DataFrame,
 	status_msg: String,
@@ -91,7 +94,7 @@ pub fn run(startup_data: StartupData) -> Result {
 		.subscription(subscription)
 		.theme(components::theme())
 		.title("Polariton")
-		.font(iced_aw::ICED_AW_FONT_BYTES)
+		.font(DEJAVU_SANS_MONO)
 		.window(window::Settings {
 			decorations: false,
 			maximized: false,
@@ -127,6 +130,7 @@ fn new(startup_data: StartupData) -> (AppState, Task<Message>) {
 	let state = AppState {
 		panes,
 		dashboard: None,
+		menu_state: MenuState::default(),
 		code_editor,
 		data_frame,
 		status_msg: "".to_string(),
@@ -173,6 +177,7 @@ fn view(app_state: &AppState) -> Element<'_, Message> {
 	components::main_screen(
 		&app_state.panes,
 		&app_state.dashboard,
+		&app_state.menu_state,
 		&app_state.code_editor,
 		&app_state.data_frame,
 		&app_state.status_msg,
@@ -212,6 +217,13 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		}
 		Message::DoCloseWindow => {
 			return window::latest().and_then(window::close);
+		}
+		Message::Menu(menu_message) => {
+			if let Some(action) = app_state.menu_state.update(menu_message)
+				&& let Some(message) = menu_action_to_message(&action)
+			{
+				return update(app_state, message);
+			}
 		}
 		Message::DragWindow => {
 			return window::latest().and_then(window::drag);
@@ -843,6 +855,80 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::ShowColumnTypesSaved => {}
 	}
 	Task::none()
+}
+
+fn menu_action_to_message(action: &str) -> Option<Message> {
+	match action {
+		"noop" => None,
+		"connect:new" => Some(Message::Connect),
+		"code:run" => Some(Message::Run),
+		"code:save" => Some(Message::OpenSaveStatementDialog),
+		"settings:preferences" => Some(Message::OpenSettings),
+		_ => {
+			if let Some(id) = action.strip_prefix("connect:load:") {
+				return id.parse().ok().map(Message::LoadSavedConnection);
+			}
+			if let Some(id) = action.strip_prefix("connect:edit:") {
+				return id.parse().ok().map(Message::EditConnection);
+			}
+			if let Some(id) = action.strip_prefix("connect:delete:") {
+				return id.parse().ok().map(Message::DeleteConnection);
+			}
+			if let Some(id) = action.strip_prefix("code:load:") {
+				return id.parse().ok().map(Message::LoadSavedStatement);
+			}
+			if let Some(id) = action.strip_prefix("code:edit:") {
+				return id.parse().ok().map(Message::EditStatement);
+			}
+			if let Some(id) = action.strip_prefix("code:delete:") {
+				return id.parse().ok().map(Message::DeleteStatement);
+			}
+			if let Some(kind) = action.strip_prefix("plot:new:") {
+				return parse_plot_type(kind).map(Message::AddPlot);
+			}
+			if let Some(format) = action.strip_prefix("plot:export:") {
+				return parse_export_format(format).map(Message::Export);
+			}
+			None
+		}
+	}
+}
+
+fn parse_plot_type(kind: &str) -> Option<crate::plot::core::PlotType> {
+	use crate::plot::core::PlotType;
+
+	match kind {
+		"Bar" => Some(PlotType::Bar),
+		"BoxPlot" => Some(PlotType::BoxPlot),
+		"Bubble" => Some(PlotType::Bubble),
+		"Candlestick" => Some(PlotType::Candlestick),
+		"FillBetween" => Some(PlotType::FillBetween),
+		"Funnel" => Some(PlotType::Funnel),
+		"Heatmap" => Some(PlotType::Heatmap),
+		"Hexbin" => Some(PlotType::Hexbin),
+		"Histogram" => Some(PlotType::Histogram),
+		"HorizontalBar" => Some(PlotType::HorizontalBar),
+		"HorizontalStackedBar" => Some(PlotType::HorizontalStackedBar),
+		"Line" => Some(PlotType::Line),
+		"Parallel" => Some(PlotType::Parallel),
+		"Pie" => Some(PlotType::Pie),
+		"Radar" => Some(PlotType::Radar),
+		"RadialDial" => Some(PlotType::RadialDial),
+		"Scatter" => Some(PlotType::Scatter),
+		"StackedArea" => Some(PlotType::StackedArea),
+		"StackedBar" => Some(PlotType::StackedBar),
+		"Violin" => Some(PlotType::Violin),
+		_ => None,
+	}
+}
+
+fn parse_export_format(format: &str) -> Option<ExportFormat> {
+	match format {
+		"SVG" => Some(ExportFormat::SVG),
+		"PNG" => Some(ExportFormat::PNG),
+		"AVIF" => Some(ExportFormat::AVIF),
+		_ => None,
+	}
 }
 
 fn get_pane_rects(

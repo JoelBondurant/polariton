@@ -1,5 +1,6 @@
 mod colors;
 mod components;
+mod menu;
 pub mod messages;
 pub mod plot_state;
 mod state;

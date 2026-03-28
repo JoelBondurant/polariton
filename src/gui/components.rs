@@ -4,7 +4,11 @@ use crate::adapters::{
 };
 use crate::gui::messages::{Message, PlotMessage};
 use crate::gui::plot_state::PlotState;
-use crate::gui::{colors, table::Table};
+use crate::gui::{
+	colors,
+	menu::{MenuBar, MenuFontPolicy, MenuItem, MenuRoot, MenuState},
+	table::Table,
+};
 use crate::persistence::{SavedConnection, SavedStatement};
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::{GridLineStyle, PlotRenderLayer, PlotWidget, ScatterRenderMode};
@@ -173,6 +177,7 @@ fn pane_title_bar<'a>(_pane_type: PaneType) -> pane_grid::TitleBar<'a, Message> 
 pub fn main_screen<'a>(
 	panes: &'a pane_grid::State<PaneType>,
 	dashboard: &'a Option<pane_grid::State<PlotState>>,
+	menu_state: &'a MenuState,
 	code_editor: &'a CodeEditor,
 	data_frame: &'a DataFrame,
 	status_msg: &'a str,
@@ -268,7 +273,12 @@ pub fn main_screen<'a>(
 		.height(28)
 		.padding([2, 4])
 		.width(Fill);
-	let main_window = window_decorations(column![main_content, status_bar], saved_connections, saved_statements);
+	let main_window = window_decorations(
+		column![main_content, status_bar],
+		menu_state,
+		saved_connections,
+		saved_statements,
+	);
 	let adapter_modal = adapter_view(adapter_state);
 	let password_modal: Element<Message> = if showing_password_prompt {
 		password_prompt_view(password_entry, password_entry_error)
@@ -294,214 +304,163 @@ pub fn main_screen<'a>(
 	stack![main_window, adapter_modal, password_modal, settings_modal, save_statement_modal].into()
 }
 
-pub fn menu_bar<'a>(saved_connections: &'a [SavedConnection], saved_statements: &'a [SavedStatement]) -> Element<'a, Message> {
-	use crate::gui::messages::ExportFormat;
-	use crate::plot::core::PlotType;
-	use iced::Border;
-	use iced_aw::{
-		menu::{Item, Menu},
-		menu_bar, menu_items,
-		style::menu_bar::Style as MenuStyle,
-	};
-	let bar_btn_style = |_theme: &Theme, _status: button::Status| button::Style {
-		background: Some(Background::Color(colors::BG_SECONDARY)),
-		text_color: colors::TEXT_PRIMARY,
-		border: border::Border::default(),
-		..Default::default()
-	};
-	let item_btn_style = |_theme: &Theme, status: button::Status| button::Style {
-		background: Some(Background::Color(match status {
-			button::Status::Hovered | button::Status::Pressed => colors::BG_BUTTON_HOVER,
-			_ => Color::TRANSPARENT,
-		})),
-		text_color: colors::TEXT_PRIMARY,
-		border: border::Border::default().rounded(3.0),
-		..Default::default()
-	};
-	let new_items: Vec<Item<'a, Message, Theme, iced::Renderer>> = PlotType::ALL
-		.iter()
-		.map(|&pt| {
-			Item::new(
-				button(text(format!("{pt}")).width(Fill))
-					.width(Fill)
-					.padding([4, 8])
-					.style(item_btn_style)
-					.on_press(Message::AddPlot(pt)),
-			)
-		})
-		.collect();
-	let new_menu = Menu::new(new_items).width(200.0).offset(0.0).spacing(2.0);
-	let export_items: Vec<Item<'a, Message, Theme, iced::Renderer>> =
-		[ExportFormat::SVG, ExportFormat::PNG, ExportFormat::AVIF]
-			.iter()
-			.map(|&fmt| {
-				Item::new(
-					button(text(format!("{fmt}")).width(Fill))
-						.width(Fill)
-						.padding([4, 8])
-						.style(item_btn_style)
-						.on_press(Message::Export(fmt)),
-				)
-			})
-			.collect();
-	let export_menu = Menu::new(export_items)
-		.width(100.0)
-		.offset(0.0)
-		.spacing(2.0);
-	let submenu_label = |label: &'static str| {
-		button(row![text(label).width(Fill), text("›")])
-			.width(Fill)
-			.padding([4, 8])
-			.style(item_btn_style)
-	};
-	let saved_items: Vec<Item<'a, Message, Theme, iced::Renderer>> = if saved_connections.is_empty()
-	{
-		vec![Item::new(
-			button(text("None saved").width(Fill))
-				.width(Fill)
-				.padding([4, 8])
-				.style(item_btn_style),
-		)]
-	} else {
-		saved_connections
-			.iter()
-			.map(|conn| {
-				let id = conn.id;
-				Item::new(
-					row![
-						button(text(conn.name.clone()).width(Fill))
-							.width(Fill)
-							.padding([4, 8])
-							.style(item_btn_style)
-							.on_press(Message::LoadSavedConnection(id)),
-						button(text("✎"))
-							.padding([4, 8])
-							.style(item_btn_style)
-							.on_press(Message::EditConnection(id)),
-						button(text("✕"))
-							.padding([4, 8])
-							.style(item_btn_style)
-							.on_press(Message::DeleteConnection(id)),
-					]
-					.spacing(2),
-				)
-			})
-			.collect()
-	};
-	let saved_menu = Menu::new(saved_items).width(240.0).offset(0.0).spacing(2.0);
-	menu_bar!(
-		(
-			button(text("Connect")).padding([4, 8]).style(bar_btn_style),
-			Menu::new(menu_items!(
-				(button(text("New").width(Fill))
-					.width(Fill)
-					.padding([4, 8])
-					.style(item_btn_style)
-					.on_press(Message::Connect)),
-				(submenu_label("Saved"), saved_menu),
-			))
-			.width(160.0)
-			.offset(15.0)
-			.spacing(2.0)
-		),
-		(
-			button(text("Code")).padding([4, 8]).style(bar_btn_style),
-			{
-				let saved_statement_items: Vec<Item<'a, Message, Theme, iced::Renderer>> =
-					if saved_statements.is_empty() {
-						vec![Item::new(
-							button(text("None saved").width(Fill))
-								.width(Fill)
-								.padding([4, 8])
-								.style(item_btn_style),
-						)]
-					} else {
-						saved_statements
-							.iter()
-							.map(|stmt| {
-								let id = stmt.id;
-								Item::new(
-									row![
-										button(text(stmt.name.clone()).width(Fill))
-											.width(Fill)
-											.padding([4, 8])
-											.style(item_btn_style)
-											.on_press(Message::LoadSavedStatement(id)),
-										button(text("✎"))
-											.padding([4, 8])
-											.style(item_btn_style)
-											.on_press(Message::EditStatement(id)),
-										button(text("✕"))
-											.padding([4, 8])
-											.style(item_btn_style)
-											.on_press(Message::DeleteStatement(id)),
-									]
-									.spacing(2),
-								)
-							})
-							.collect()
-					};
-				let saved_statement_menu =
-					Menu::new(saved_statement_items).width(240.0).offset(0.0).spacing(2.0);
-				Menu::new(menu_items!(
-					(button(text("Run  (Ctrl+Enter)").width(Fill))
-						.width(Fill)
-						.padding([4, 8])
-						.style(item_btn_style)
-						.on_press(Message::Run)),
-					(button(text("Save...").width(Fill))
-						.width(Fill)
-						.padding([4, 8])
-						.style(item_btn_style)
-						.on_press(Message::OpenSaveStatementDialog)),
-					(submenu_label("Saved"), saved_statement_menu)
-				))
-				.width(160.0)
-				.offset(15.0)
-				.spacing(2.0)
-			}
-		),
-		(
-			button(text("Plot")).padding([4, 8]).style(bar_btn_style),
-			Menu::new(menu_items!(
-				(submenu_label("New"), new_menu),
-				(submenu_label("Export"), export_menu),
-			))
-			.width(120.0)
-			.offset(15.0)
-			.spacing(2.0)
-		),
-		(
-			button(text("Settings"))
-				.padding([4, 8])
-				.style(bar_btn_style),
-			Menu::new(menu_items!(
-				(button(text("Preferences").width(Fill))
-					.width(Fill)
-					.padding([4, 8])
-					.style(item_btn_style)
-					.on_press(Message::OpenSettings))
-			))
-			.width(140.0)
-			.offset(15.0)
-			.spacing(2.0)
-		)
+pub fn menu_bar<'a>(
+	menu_state: &'a MenuState,
+	saved_connections: &'a [SavedConnection],
+	saved_statements: &'a [SavedStatement],
+) -> Element<'a, Message> {
+	Element::from(MenuBar::new(
+		build_menu_roots(saved_connections, saved_statements),
+		menu_state,
 	)
-	.style(|_theme: &Theme, _status| MenuStyle {
-		bar_background: Background::Color(colors::BG_SECONDARY),
-		bar_border: Border::default(),
-		bar_shadow: Default::default(),
-		menu_background: Background::Color(colors::BG_SECONDARY),
-		menu_border: border::Border {
-			color: colors::BORDER_PRIMARY,
-			width: 1.0,
-			radius: 4.0.into(),
+	.font_policy(MenuFontPolicy::SystemWithFallback))
+	.map(Message::Menu)
+}
+
+fn build_menu_roots(
+	saved_connections: &[SavedConnection],
+	saved_statements: &[SavedStatement],
+) -> Vec<MenuRoot> {
+	vec![
+		MenuRoot {
+			id: "connect".into(),
+			label: "Connect".into(),
+			items: vec![
+				MenuItem::Action {
+					id: "connect:new".into(),
+					label: "New".into(),
+				},
+				MenuItem::Separator,
+				MenuItem::Submenu {
+					id: "connect:saved".into(),
+					label: "Saved".into(),
+					items: build_saved_connection_items(saved_connections),
+				},
+			],
 		},
-		menu_shadow: Default::default(),
-		path: Background::Color(colors::BG_BUTTON),
-		path_border: Border::default(),
-	})
-	.into()
+		MenuRoot {
+			id: "code".into(),
+			label: "Code".into(),
+			items: vec![
+				MenuItem::Action {
+					id: "code:run".into(),
+					label: "Run  (Ctrl+Enter)".into(),
+				},
+				MenuItem::Action {
+					id: "code:save".into(),
+					label: "Save...".into(),
+				},
+				MenuItem::Separator,
+				MenuItem::Submenu {
+					id: "code:saved".into(),
+					label: "Saved".into(),
+					items: build_saved_statement_items(saved_statements),
+				},
+			],
+		},
+		MenuRoot {
+			id: "plot".into(),
+			label: "Plot".into(),
+			items: vec![
+				MenuItem::Submenu {
+					id: "plot:new".into(),
+					label: "New".into(),
+					items: crate::plot::core::PlotType::ALL
+						.iter()
+						.map(|plot_type| MenuItem::Action {
+							id: format!("plot:new:{plot_type:?}"),
+							label: plot_type.to_string(),
+						})
+						.collect(),
+				},
+				MenuItem::Submenu {
+					id: "plot:export".into(),
+					label: "Export".into(),
+					items: [
+						crate::gui::messages::ExportFormat::SVG,
+						crate::gui::messages::ExportFormat::PNG,
+						crate::gui::messages::ExportFormat::AVIF,
+					]
+					.into_iter()
+					.map(|format| MenuItem::Action {
+						id: format!("plot:export:{format}"),
+						label: format.to_string(),
+					})
+					.collect(),
+				},
+			],
+		},
+		MenuRoot {
+			id: "settings".into(),
+			label: "Settings".into(),
+			items: vec![MenuItem::Action {
+				id: "settings:preferences".into(),
+				label: "Preferences".into(),
+			}],
+		},
+	]
+}
+
+fn build_saved_connection_items(saved_connections: &[SavedConnection]) -> Vec<MenuItem> {
+	if saved_connections.is_empty() {
+		return vec![MenuItem::Action {
+			id: "noop".into(),
+			label: "None saved".into(),
+		}];
+	}
+
+	saved_connections
+		.iter()
+		.map(|conn| MenuItem::Submenu {
+			id: format!("connect:saved:{}", conn.id),
+			label: conn.name.clone(),
+			items: vec![
+				MenuItem::Action {
+					id: format!("connect:load:{}", conn.id),
+					label: "Load".into(),
+				},
+				MenuItem::Action {
+					id: format!("connect:edit:{}", conn.id),
+					label: "Edit".into(),
+				},
+				MenuItem::Action {
+					id: format!("connect:delete:{}", conn.id),
+					label: "Delete".into(),
+				},
+			],
+		})
+		.collect()
+}
+
+fn build_saved_statement_items(saved_statements: &[SavedStatement]) -> Vec<MenuItem> {
+	if saved_statements.is_empty() {
+		return vec![MenuItem::Action {
+			id: "noop".into(),
+			label: "None saved".into(),
+		}];
+	}
+
+	saved_statements
+		.iter()
+		.map(|stmt| MenuItem::Submenu {
+			id: format!("code:saved:{}", stmt.id),
+			label: stmt.name.clone(),
+			items: vec![
+				MenuItem::Action {
+					id: format!("code:load:{}", stmt.id),
+					label: "Load".into(),
+				},
+				MenuItem::Action {
+					id: format!("code:edit:{}", stmt.id),
+					label: "Edit".into(),
+				},
+				MenuItem::Action {
+					id: format!("code:delete:{}", stmt.id),
+					label: "Delete".into(),
+				},
+			],
+		})
+		.collect()
 }
 
 fn dashboard_view<'a>(state: &'a pane_grid::State<PlotState>) -> Element<'a, Message> {
@@ -1394,6 +1353,7 @@ fn horizontal_rule<'a>() -> Element<'a, Message> {
 
 fn window_decorations<'a>(
 	underlay: impl Into<Element<'a, Message>>,
+	menu_state: &'a MenuState,
 	saved_connections: &'a [SavedConnection],
 	saved_statements: &'a [SavedStatement],
 ) -> Element<'a, Message> {
@@ -1433,8 +1393,13 @@ fn window_decorations<'a>(
 			],
 			column![
 				row![title_bar()],
-				row![menu_bar(saved_connections, saved_statements)],
-				underlay.into(),
+				stack![
+					column![
+						space::vertical().height(32),
+						underlay.into(),
+					],
+					row![menu_bar(menu_state, saved_connections, saved_statements)],
+				],
 				row![
 					resize_area_southwest_bottom,
 					resize_area_south,

@@ -1,3 +1,4 @@
+use super::menu;
 use crate::adapters::{
 	common::{DatabaseAdapter, ExecutionResult},
 	driver::AdapterSelection,
@@ -61,6 +62,7 @@ pub enum Message {
 	LoadSavedConnection(i64),
 	LoadSavedStatement(i64),
 	MaximizeWindow,
+	Menu(menu::MenuMessage),
 	MinimizeWindow,
 	OpenSaveStatementDialog,
 	OpenSettings,
