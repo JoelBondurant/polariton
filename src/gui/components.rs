@@ -7,11 +7,11 @@ use crate::gui::plot_state::PlotState;
 use crate::gui::{colors, table::Table};
 use crate::persistence::{SavedConnection, SavedStatement};
 use crate::plot::colors::ColorTheme;
-use crate::plot::common::{GridLineStyle, PlotWidget};
+use crate::plot::common::{GridLineStyle, PlotRenderLayer, PlotWidget, ScatterRenderMode};
 use crate::plot::core::PlotType;
 use iced::widget::{
 	button, canvas, center, checkbox, column, container, mouse_area, opaque, pane_grid, pick_list,
-	row, scrollable, space, stack, text, text_input, tooltip, TextInput, Tooltip,
+	row, scrollable, space, stack, text, text_input, TextInput,
 };
 use iced::{
 	border, font, mouse,
@@ -557,19 +557,37 @@ fn dashboard_view<'a>(state: &'a pane_grid::State<PlotState>) -> Element<'a, Mes
 }
 
 fn plot_view<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Message> {
-	let canvas_widget = canvas(PlotWidget {
+	let data_canvas: Element<PlotMessage> = canvas(PlotWidget {
 		kernel: state.kernel.as_ref(),
 		title: state.current_plot_type.to_string(),
 		padding: 20.0,
 		settings: state.plot_settings.clone(),
+		render_revision: state.render_revision,
+		resize_render_suspended: state.resize_render_suspended,
+		layer: PlotRenderLayer::Data,
 	})
 	.width(Fill)
-	.height(Fill);
-	let plot_content: Element<PlotMessage> = if let Some(info) = &state.hovered_info {
-		Tooltip::new(
-			canvas_widget,
+	.height(Fill)
+	.into();
+	let overlay_canvas: Element<PlotMessage> = canvas(PlotWidget {
+		kernel: state.kernel.as_ref(),
+		title: state.current_plot_type.to_string(),
+		padding: 20.0,
+		settings: state.plot_settings.clone(),
+		render_revision: state.render_revision,
+		resize_render_suspended: state.resize_render_suspended,
+		layer: PlotRenderLayer::OverlayInteractive,
+	})
+	.width(Fill)
+	.height(Fill)
+	.into();
+	let plot_content: Element<PlotMessage> = stack![data_canvas, overlay_canvas].into();
+	let plot_content = plot_content.map(move |pm| Message::PlotEvent(id, pm));
+	let mut main_stack = stack![plot_content];
+	if let Some(info) = &state.hovered_info {
+		main_stack = main_stack.push(
 			container(text(info))
-				.padding(5)
+				.padding(6)
 				.style(|_| container::Style {
 					background: Some(iced::Background::Color(iced::Color {
 						a: 0.85,
@@ -586,14 +604,8 @@ fn plot_view<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element<'a, Messa
 					text_color: Some(state.plot_settings.decoration_color),
 					..Default::default()
 				}),
-			tooltip::Position::FollowCursor,
-		)
-		.into()
-	} else {
-		canvas_widget.into()
-	};
-	let plot_content = plot_content.map(move |pm| Message::PlotEvent(id, pm));
-	let mut main_stack = stack![plot_content];
+		);
+	}
 	if state.settings_open {
 		let settings_panel = plot_settings_panel(id, state);
 		let modal_overlay = container(opaque(
@@ -636,6 +648,17 @@ fn plot_settings_panel<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element
 					section(
 						"General",
 						column![
+							row![
+								checkbox(state.live_updates_enabled)
+									.label("Live Updates")
+									.on_toggle(move |v| {
+										plot_event(PlotMessage::ToggleLiveUpdates(v))
+									}),
+								space::horizontal(),
+								button("Apply").on_press(plot_event(PlotMessage::ApplySettings)),
+							]
+							.align_y(Alignment::Center),
+							horizontal_rule(),
 							field(
 								"Plot Type",
 								pick_list(
@@ -650,6 +673,57 @@ fn plot_settings_panel<'a>(id: pane_grid::Pane, state: &'a PlotState) -> Element
 									&ColorTheme::ALL[..],
 									Some(state.plot_settings.color_theme),
 									move |ct| plot_event(PlotMessage::ChangeColorTheme(ct))
+								)
+							),
+							horizontal_rule(),
+							field(
+								"Scatter Mode",
+								pick_list(
+									&ScatterRenderMode::ALL[..],
+									Some(state.plot_settings.scatter_render_mode),
+									move |mode| plot_event(PlotMessage::SetScatterRenderMode(mode))
+								)
+							),
+							field(
+								"Vector Limit",
+								text_input("", &state.scatter_max_vector_points_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<u32>() {
+											plot_event(PlotMessage::SetScatterMaxVectorPoints(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
+								)
+							),
+							field(
+								"Sample Target",
+								text_input("", &state.scatter_downsample_target_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<u32>() {
+											plot_event(PlotMessage::SetScatterDownsampleTarget(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
+								)
+							),
+							field(
+								"Raster Threshold",
+								text_input("", &state.scatter_raster_threshold_input).on_input(
+									move |s| {
+										if let Ok(val) = s.parse::<u32>() {
+											plot_event(PlotMessage::SetScatterRasterThreshold(val))
+										} else {
+											plot_event(PlotMessage::UpdateHover(
+												state.hovered_info.clone(),
+											))
+										}
+									}
 								)
 							),
 						]

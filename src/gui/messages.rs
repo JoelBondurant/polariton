@@ -4,7 +4,8 @@ use crate::adapters::{
 };
 use crate::persistence::{PrivateDb, SavedConnection, SavedStatement};
 use crate::plot::colors::ColorTheme;
-use crate::plot::common::GridLineStyle;
+use crate::plot::common::{GridLineStyle, ScatterRenderMode};
+use crate::plot::common::PlotKernel;
 use crate::plot::core::PlotType;
 use iced::{widget::pane_grid, window};
 use iced::{Color, Rectangle};
@@ -37,6 +38,7 @@ pub enum Message {
 	AdapterConnected(Option<Arc<RwLock<dyn DatabaseAdapter>>>),
 	AdapterSelected(AdapterSelection),
 	AddPlot(PlotType),
+	AddPlotReady(PlotType, Arc<dyn PlotKernel + Send + Sync>),
 	ClosePlot(pane_grid::Pane),
 	CloseSaveStatementDialog,
 	CloseSettings,
@@ -68,6 +70,8 @@ pub enum Message {
 	PasswordEntryChanged(String),
 	PasswordEntrySubmit,
 	PlotEvent(pane_grid::Pane, PlotMessage),
+	RefreshPlotReady(pane_grid::Pane, PlotType, Arc<dyn PlotKernel + Send + Sync>),
+	ResizePlotsSettled,
 	PrivateDbError(String),
 	PrivateDbReady(PrivateDb),
 	PrivateDbRekeyed(PrivateDb),
@@ -100,11 +104,16 @@ pub enum PlotMessage {
 	ChangeDecorationHex(String),
 	ChangePlotType(PlotType),
 	CloseSettings,
+	ApplySettings,
 	RefreshData,
 	SetLegendSize(f32),
 	SetLegendX(f32),
 	SetLegendY(f32),
 	SetMaxLegendRows(u32),
+	SetScatterDownsampleTarget(u32),
+	SetScatterMaxVectorPoints(u32),
+	SetScatterRasterThreshold(u32),
+	SetScatterRenderMode(ScatterRenderMode),
 	SetPlotPaddingBottom(f32),
 	SetPlotPaddingLeft(f32),
 	SetPlotPaddingRight(f32),
@@ -141,6 +150,7 @@ pub enum PlotMessage {
 	SetYMinorTicks(u32),
 	SetYTickSize(f32),
 	SetYTicks(u32),
+	ToggleLiveUpdates(bool),
 	ToggleSettings,
 	ToggleXMajorGrid(bool),
 	ToggleXMinorGrid(bool),

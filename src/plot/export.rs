@@ -1,7 +1,10 @@
 use crate::plot::common::{PathBuilder, PlotBackend};
+use base64::Engine;
 use iced::widget::canvas::{Stroke, Text};
 use iced::{advanced::text::Alignment, alignment::Vertical, Color, Point, Rectangle};
 use kurbo::Affine;
+use png::{BitDepth, ColorType, Encoder};
+use std::io::Cursor;
 use std::path::Path as StdPath;
 use std::sync::Arc;
 
@@ -184,6 +187,44 @@ impl PlotBackend for SvgBackend {
 		self.svg.push('\n');
 	}
 
+	fn supports_embedded_raster(&self) -> bool { true }
+
+	fn draw_image_rgba(
+		&mut self,
+		top_left: Point,
+		size: iced::Size,
+		width: u32,
+		height: u32,
+		rgba: &[u8],
+	) {
+		let mut png_bytes = Vec::new();
+		{
+			let cursor = Cursor::new(&mut png_bytes);
+			let mut encoder = Encoder::new(cursor, width, height);
+			encoder.set_color(ColorType::Rgba);
+			encoder.set_depth(BitDepth::Eight);
+			let mut writer = encoder.write_header().unwrap();
+			writer.write_image_data(rgba).unwrap();
+		}
+
+		let c = self.current_transform.as_coeffs();
+		let matrix = format!(
+			"matrix({:.4} {:.4} {:.4} {:.4} {:.4} {:.4})",
+			c[0], c[1], c[2], c[3], c[4], c[5]
+		);
+		let encoded = base64::engine::general_purpose::STANDARD.encode(png_bytes);
+		self.svg.push_str(&format!(
+			r#"<image transform="{}" x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" href="data:image/png;base64,{}" preserveAspectRatio="none" />"#,
+			matrix,
+			top_left.x,
+			top_left.y,
+			size.width,
+			size.height,
+			encoded
+		));
+		self.svg.push('\n');
+	}
+
 	fn translate(&mut self, translation: iced::Vector) {
 		self.current_transform *= Affine::translate((translation.x as f64, translation.y as f64));
 	}
@@ -319,6 +360,22 @@ impl PlotBackend for AvifBackend {
 		self.svg_backend.fill_text(text);
 	}
 
+	fn supports_embedded_raster(&self) -> bool {
+		self.svg_backend.supports_embedded_raster()
+	}
+
+	fn draw_image_rgba(
+		&mut self,
+		top_left: Point,
+		size: iced::Size,
+		width: u32,
+		height: u32,
+		rgba: &[u8],
+	) {
+		self.svg_backend
+			.draw_image_rgba(top_left, size, width, height, rgba);
+	}
+
 	fn translate(&mut self, translation: iced::Vector) {
 		self.svg_backend.translate(translation);
 	}
@@ -353,6 +410,22 @@ impl PlotBackend for PngBackend {
 
 	fn fill_text(&mut self, text: Text) {
 		self.svg_backend.fill_text(text);
+	}
+
+	fn supports_embedded_raster(&self) -> bool {
+		self.svg_backend.supports_embedded_raster()
+	}
+
+	fn draw_image_rgba(
+		&mut self,
+		top_left: Point,
+		size: iced::Size,
+		width: u32,
+		height: u32,
+		rgba: &[u8],
+	) {
+		self.svg_backend
+			.draw_image_rgba(top_left, size, width, height, rgba);
 	}
 
 	fn translate(&mut self, translation: iced::Vector) {

@@ -6,13 +6,13 @@ use crate::persistence::{self, SavedConnection, SavedStatement, StartupData};
 use crate::gui::{
 	components::{self, PaneType},
 	messages::{ExportFormat, Message, PlotMessage},
-	plot_state::PlotState,
+	plot_state::{PlotState, create_plot},
 };
 use crate::plot::export::{AvifBackend, PngBackend, SvgBackend};
-use iced::{application, event, keyboard, widget::pane_grid, window, Element, Size, Subscription, Task};
+use iced::{application, event, keyboard, time, widget::pane_grid, window, Element, Size, Subscription, Task};
 use iced_code_editor::CodeEditor;
 use polars::frame::DataFrame;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 struct AppState {
 	panes: pane_grid::State<PaneType>,
@@ -43,19 +43,43 @@ struct AppState {
 	settings_confirm_password: String,
 	settings_error: String,
 	show_column_types: bool,
+	dashboard_resize_freeze_until: Option<Instant>,
 }
 
 pub type Result = iced::Result;
 
-fn subscription(_state: &AppState) -> Subscription<Message> {
-	event::listen_with(|ev, _status, _window| match ev {
+fn build_plot_task(
+	df: DataFrame,
+	plot_type: crate::plot::core::PlotType,
+	on_ready: impl FnOnce(std::sync::Arc<dyn crate::plot::common::PlotKernel + Send + Sync>) -> Message
+		+ Send
+		+ 'static,
+) -> Task<Message> {
+	Task::perform(
+		async move {
+			tokio::task::spawn_blocking(move || create_plot(plot_type, &df, 1200, 1200))
+				.await
+				.expect("plot build task panicked")
+		},
+		on_ready,
+	)
+}
+
+fn subscription(state: &AppState) -> Subscription<Message> {
+	let events = event::listen_with(|ev, _status, _window| match ev {
 		event::Event::Keyboard(keyboard::Event::KeyPressed {
 			key: keyboard::Key::Named(keyboard::key::Named::Enter),
 			modifiers,
 			..
 		}) if modifiers.control() => Some(Message::Run),
 		_ => None,
-	})
+	});
+	let resize_tick = if state.dashboard_resize_freeze_until.is_some() {
+		time::every(Duration::from_millis(75)).map(|_| Message::ResizePlotsSettled)
+	} else {
+		Subscription::none()
+	};
+	Subscription::batch([events, resize_tick])
 }
 
 pub fn run(startup_data: StartupData) -> Result {
@@ -129,6 +153,7 @@ fn new(startup_data: StartupData) -> (AppState, Task<Message>) {
 		settings_confirm_password: String::new(),
 		settings_error: String::new(),
 		show_column_types: startup_data.show_column_types,
+		dashboard_resize_freeze_until: None,
 	};
 	let task = if !is_password_protected {
 		Task::perform(
@@ -219,6 +244,28 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 		Message::DashboardPaneResized(pane_grid::ResizeEvent { split, ratio }) => {
 			if let Some(dashboard) = &mut app_state.dashboard {
 				dashboard.resize(split, ratio);
+				for plot_state in dashboard.panes.values_mut() {
+					plot_state.resize_render_suspended = true;
+				}
+			}
+			app_state.dashboard_resize_freeze_until =
+				Some(Instant::now() + Duration::from_millis(250));
+		}
+		Message::ResizePlotsSettled => {
+			let Some(until) = app_state.dashboard_resize_freeze_until else {
+				return Task::none();
+			};
+			if Instant::now() < until {
+				return Task::none();
+			}
+			app_state.dashboard_resize_freeze_until = None;
+			if let Some(dashboard) = &mut app_state.dashboard {
+				for plot_state in dashboard.panes.values_mut() {
+					if plot_state.resize_render_suspended {
+						plot_state.resize_render_suspended = false;
+						plot_state.render_revision = plot_state.render_revision.wrapping_add(1);
+					}
+				}
 			}
 		}
 		Message::DashboardPaneDragged(drag_event) => {
@@ -333,7 +380,13 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			}
 		}
 		Message::AddPlot(plot_type) => {
-			let new_plot = PlotState::new(plot_type, &app_state.data_frame, 1200, 1200);
+			app_state.status_msg = format!("Generating {plot_type} plot...");
+			return build_plot_task(app_state.data_frame.clone(), plot_type, move |kernel| {
+				Message::AddPlotReady(plot_type, kernel)
+			});
+		}
+		Message::AddPlotReady(plot_type, kernel) => {
+			let new_plot = PlotState::with_kernel(plot_type, kernel, 1200, 1200);
 			if let Some(dashboard) = &mut app_state.dashboard {
 				let last_pane = *dashboard.panes.keys().next().unwrap();
 				let _ = dashboard.split(pane_grid::Axis::Horizontal, last_pane, new_plot);
@@ -341,6 +394,7 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 				let (dashboard, _) = pane_grid::State::new(new_plot);
 				app_state.dashboard = Some(dashboard);
 			}
+			app_state.status_msg = format!("{plot_type} plot ready.");
 		}
 		Message::ClosePlot(pane) => {
 			if let Some(dashboard) = &mut app_state.dashboard {
@@ -355,12 +409,68 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 			if let Some(dashboard) = &mut app_state.dashboard
 				&& let Some(plot_state) = dashboard.get_mut(pane)
 			{
-				match plot_message {
+				match plot_message.clone() {
 					PlotMessage::RefreshData => {
-						plot_state.refresh(&app_state.data_frame);
+						let plot_type = plot_state.current_plot_type;
+						app_state.status_msg = format!("Refreshing {plot_type} plot...");
+						return build_plot_task(
+							app_state.data_frame.clone(),
+							plot_type,
+							move |kernel| Message::RefreshPlotReady(pane, plot_type, kernel),
+						);
+					}
+					PlotMessage::ChangePlotType(new_type) => {
+						plot_state.update(plot_message);
+						if plot_state.live_updates_enabled {
+							app_state.status_msg = format!("Generating {new_type} plot...");
+							return build_plot_task(
+								app_state.data_frame.clone(),
+								new_type,
+								move |kernel| Message::RefreshPlotReady(pane, new_type, kernel),
+							);
+						}
+					}
+					PlotMessage::ApplySettings => {
+						let needs_kernel_rebuild =
+							plot_state.current_plot_type != plot_state.kernel_plot_type;
+						plot_state.update(plot_message);
+						if needs_kernel_rebuild {
+							let plot_type = plot_state.current_plot_type;
+							app_state.status_msg = format!("Applying {plot_type} plot changes...");
+							return build_plot_task(
+								app_state.data_frame.clone(),
+								plot_type,
+								move |kernel| Message::RefreshPlotReady(pane, plot_type, kernel),
+							);
+						}
+					}
+					PlotMessage::ToggleLiveUpdates(true) => {
+						let next_plot_type = plot_state.current_plot_type;
+						let needs_kernel_rebuild =
+							next_plot_type != plot_state.kernel_plot_type;
+						plot_state.update(plot_message);
+						if needs_kernel_rebuild {
+							app_state.status_msg =
+								format!("Generating {next_plot_type} plot...");
+							return build_plot_task(
+								app_state.data_frame.clone(),
+								next_plot_type,
+								move |kernel| {
+									Message::RefreshPlotReady(pane, next_plot_type, kernel)
+								},
+							);
+						}
 					}
 					_ => plot_state.update(plot_message),
 				}
+			}
+		}
+		Message::RefreshPlotReady(pane, plot_type, kernel) => {
+			if let Some(dashboard) = &mut app_state.dashboard
+				&& let Some(plot_state) = dashboard.get_mut(pane)
+			{
+				plot_state.set_kernel(plot_type, kernel);
+				app_state.status_msg = format!("{plot_type} plot ready.");
 			}
 		}
 		Message::Export(format) => {
@@ -401,6 +511,9 @@ fn update(app_state: &mut AppState, message: Message) -> Task<Message> {
 							title: plot_state.current_plot_type.to_string(),
 							padding: 20.0,
 							settings: settings.clone(),
+							render_revision: plot_state.render_revision,
+							resize_render_suspended: plot_state.resize_render_suspended,
+							layer: crate::plot::common::PlotRenderLayer::Full,
 						};
 						match format {
 							ExportFormat::SVG => {

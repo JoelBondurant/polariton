@@ -26,10 +26,14 @@ use polars::prelude::{Column, DataType};
 use std::sync::Arc;
 
 pub struct PlotState {
-	pub kernel: Box<dyn PlotKernel>,
+	pub kernel: Arc<dyn PlotKernel + Send + Sync>,
 	pub hovered_info: Option<String>,
 	pub current_plot_type: PlotType,
+	pub kernel_plot_type: PlotType,
 	pub plot_settings: PlotSettings,
+	pub live_updates_enabled: bool,
+	pub resize_render_suspended: bool,
+	pub render_revision: u64,
 	pub last_bounds: Rectangle,
 	pub max_legend_rows_input: String,
 	pub legend_x_input: String,
@@ -69,18 +73,29 @@ pub struct PlotState {
 	pub y_major_grid_width_input: String,
 	pub x_minor_grid_width_input: String,
 	pub y_minor_grid_width_input: String,
+	pub scatter_max_vector_points_input: String,
+	pub scatter_downsample_target_input: String,
+	pub scatter_raster_threshold_input: String,
 	pub settings_open: bool,
 }
 
 impl PlotState {
-	pub fn new(plot_type: PlotType, df: &DataFrame, width: u32, height: u32) -> Self {
-		let kernel = create_plot(plot_type, df, width, height);
+	pub fn with_kernel(
+		plot_type: PlotType,
+		kernel: Arc<dyn PlotKernel + Send + Sync>,
+		width: u32,
+		height: u32,
+	) -> Self {
 		let plot_settings = PlotSettings::default();
 		Self {
 			kernel,
 			hovered_info: None,
 			current_plot_type: plot_type,
+			kernel_plot_type: plot_type,
+			live_updates_enabled: true,
+			resize_render_suspended: false,
 			last_bounds: Rectangle::with_size(Size::new(width as f32, height as f32)),
+			render_revision: 0,
 			bg_color_input: colors::color_to_hex(plot_settings.background_color),
 			decoration_color_input: colors::color_to_hex(plot_settings.decoration_color),
 			x_min_input: String::new(),
@@ -114,6 +129,11 @@ impl PlotState {
 			y_major_grid_width_input: plot_settings.y_major_grid_width.to_string(),
 			x_minor_grid_width_input: plot_settings.x_minor_grid_width.to_string(),
 			y_minor_grid_width_input: plot_settings.y_minor_grid_width.to_string(),
+			scatter_max_vector_points_input: plot_settings.scatter_max_vector_points.to_string(),
+			scatter_downsample_target_input: plot_settings
+				.scatter_downsample_target
+				.to_string(),
+			scatter_raster_threshold_input: plot_settings.scatter_raster_threshold.to_string(),
 			plot_settings: plot_settings.clone(),
 			max_legend_rows_input: plot_settings.max_legend_rows.to_string(),
 			legend_x_input: plot_settings.legend_x.to_string(),
@@ -124,13 +144,28 @@ impl PlotState {
 		}
 	}
 
-	pub fn refresh(&mut self, df: &DataFrame) {
-		self.kernel = create_plot(self.current_plot_type, df, 1200, 1200);
+	pub fn set_kernel(&mut self, plot_type: PlotType, kernel: Arc<dyn PlotKernel + Send + Sync>) {
+		self.kernel = kernel;
+		self.current_plot_type = plot_type;
+		self.kernel_plot_type = plot_type;
 		self.hovered_info = None;
+		self.render_revision = self.render_revision.wrapping_add(1);
 	}
 
 	pub fn update(&mut self, message: PlotMessage) {
+		let was_live_updates_enabled = self.live_updates_enabled;
+		let manual_apply = matches!(&message, PlotMessage::ApplySettings);
+		let requires_redraw = !matches!(
+			&message,
+			PlotMessage::UpdateHover(_)
+				| PlotMessage::UpdateBounds(_)
+				| PlotMessage::ToggleSettings
+				| PlotMessage::CloseSettings
+				| PlotMessage::RefreshData
+				| PlotMessage::ApplySettings
+		);
 		match message {
+			PlotMessage::ApplySettings => {}
 			PlotMessage::RefreshData => {}
 			PlotMessage::UpdateHover(hover) => {
 				self.hovered_info = hover;
@@ -146,6 +181,21 @@ impl PlotState {
 			PlotMessage::SetMaxLegendRows(rows) => {
 				self.plot_settings.max_legend_rows = rows;
 				self.max_legend_rows_input = rows.to_string();
+			}
+			PlotMessage::SetScatterRenderMode(mode) => {
+				self.plot_settings.scatter_render_mode = mode;
+			}
+			PlotMessage::SetScatterMaxVectorPoints(points) => {
+				self.plot_settings.scatter_max_vector_points = points.max(1);
+				self.scatter_max_vector_points_input = points.to_string();
+			}
+			PlotMessage::SetScatterDownsampleTarget(points) => {
+				self.plot_settings.scatter_downsample_target = points.max(1);
+				self.scatter_downsample_target_input = points.to_string();
+			}
+			PlotMessage::SetScatterRasterThreshold(points) => {
+				self.plot_settings.scatter_raster_threshold = points.max(1);
+				self.scatter_raster_threshold_input = points.to_string();
 			}
 			PlotMessage::SetLegendX(x) => {
 				self.plot_settings.legend_x = x.clamp(0.0, 1.0);
@@ -292,6 +342,9 @@ impl PlotState {
 				self.plot_settings.y_ticks = val;
 				self.y_ticks_input = val.to_string();
 			}
+			PlotMessage::ToggleLiveUpdates(val) => {
+				self.live_updates_enabled = val;
+			}
 			PlotMessage::SetXMinorTicks(val) => {
 				self.plot_settings.x_minor_ticks = val;
 				self.x_minor_ticks_input = val.to_string();
@@ -353,6 +406,12 @@ impl PlotState {
 				self.settings_open = false;
 			}
 		}
+		if manual_apply || (requires_redraw && self.live_updates_enabled) {
+			self.render_revision = self.render_revision.wrapping_add(1);
+		}
+		if !was_live_updates_enabled && self.live_updates_enabled {
+			self.render_revision = self.render_revision.wrapping_add(1);
+		}
 	}
 }
 
@@ -361,7 +420,7 @@ pub fn create_plot(
 	df: &DataFrame,
 	_width: u32,
 	_height: u32,
-) -> Box<dyn PlotKernel> {
+) -> Arc<dyn PlotKernel + Send + Sync> {
 	let _cols = df.get_column_names();
 	let string_cols: Vec<&str> = df
 		.columns()
@@ -381,13 +440,13 @@ pub fn create_plot(
 			let cat = string_cols.first().copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = violin::prepare_violin_data(df, cat, val, None);
-			Box::new(ViolinPlotKernel {
+			Arc::new(ViolinPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
 		PlotType::Hexbin => {
 			let prepared = hexbin::prepare_hexbin_data(df, 0.02);
-			Box::new(HexbinPlotKernel {
+			Arc::new(HexbinPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -396,7 +455,7 @@ pub fn create_plot(
 			let x = numeric_cols.first().copied().unwrap_or("");
 			let y = numeric_cols.get(1).copied().unwrap_or(x);
 			let prepared = line::prepare_line_data(df, cat, x, y);
-			Box::new(LinePlotKernel {
+			Arc::new(LinePlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -405,7 +464,7 @@ pub fn create_plot(
 			let group = string_cols.get(1).copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = bar::prepare_bar_data(df, cat, group, val);
-			Box::new(BarPlotKernel {
+			Arc::new(BarPlotKernel {
 				prepared_data: Arc::new(prepared),
 				orientation: Orientation::Vertical,
 			})
@@ -415,7 +474,7 @@ pub fn create_plot(
 			let group = string_cols.get(1).copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = bar::prepare_bar_data(df, cat, group, val);
-			Box::new(BarPlotKernel {
+			Arc::new(BarPlotKernel {
 				prepared_data: Arc::new(prepared),
 				orientation: Orientation::Horizontal,
 			})
@@ -425,16 +484,14 @@ pub fn create_plot(
 			let x = numeric_cols.first().copied().unwrap_or("");
 			let y = numeric_cols.get(1).copied().unwrap_or(x);
 			let prepared = scatter::prepare_scatter_data(df, cat, x, y, 3.0);
-			Box::new(ScatterPlotKernel {
-				prepared_data: Arc::new(prepared),
-			})
+			Arc::new(ScatterPlotKernel::new(Arc::new(prepared)))
 		}
 		PlotType::StackedBar => {
 			let cat = string_cols.first().copied().unwrap_or("");
 			let group = string_cols.get(1).copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = stacked_bar::prepare_stacked_bar_data(df, cat, group, val);
-			Box::new(StackedBarPlotKernel {
+			Arc::new(StackedBarPlotKernel {
 				prepared_data: Arc::new(prepared),
 				orientation: Orientation::Vertical,
 			})
@@ -444,7 +501,7 @@ pub fn create_plot(
 			let group = string_cols.get(1).copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = stacked_bar::prepare_stacked_bar_data(df, cat, group, val);
-			Box::new(StackedBarPlotKernel {
+			Arc::new(StackedBarPlotKernel {
 				prepared_data: Arc::new(prepared),
 				orientation: Orientation::Horizontal,
 			})
@@ -453,7 +510,7 @@ pub fn create_plot(
 			let cat = string_cols.first().copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = pie::prepare_pie_data(df, cat, val);
-			Box::new(PiePlotKernel {
+			Arc::new(PiePlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -461,7 +518,7 @@ pub fn create_plot(
 			let cat = string_cols.first().copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = boxplot::prepare_box_plot_data(df, cat, val);
-			Box::new(BoxPlotKernel {
+			Arc::new(BoxPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -472,7 +529,7 @@ pub fn create_plot(
 			let color = string_cols.first().copied().unwrap_or("");
 			let label = string_cols.get(1).copied();
 			let prepared = bubble::prepare_bubble_data(df, x, y, size, color, label);
-			Box::new(BubblePlotKernel {
+			Arc::new(BubblePlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -483,7 +540,7 @@ pub fn create_plot(
 			let low = numeric_cols.get(3).copied().unwrap_or("");
 			let close = numeric_cols.get(4).copied().unwrap_or("");
 			let prepared = candlestick::prepare_candlestick_data(df, x, open, high, low, close);
-			Box::new(CandlestickPlotKernel {
+			Arc::new(CandlestickPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -493,7 +550,7 @@ pub fn create_plot(
 			let lower = numeric_cols.get(2).copied().unwrap_or("");
 			let upper = numeric_cols.get(3).copied().unwrap_or("");
 			let prepared = fill_between::prepare_fill_between_data(df, x, mid, lower, upper);
-			Box::new(FillBetweenPlotKernel {
+			Arc::new(FillBetweenPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -501,7 +558,7 @@ pub fn create_plot(
 			let stage = string_cols.first().copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = funnel::prepare_funnel_data(df, stage, val);
-			Box::new(FunnelPlotKernel {
+			Arc::new(FunnelPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -510,14 +567,14 @@ pub fn create_plot(
 			let y = string_cols.get(1).copied().unwrap_or("");
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = heatmap::prepare_heatmap_data(df, x, y, val);
-			Box::new(HeatmapPlotKernel {
+			Arc::new(HeatmapPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
 		PlotType::Histogram => {
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let prepared = histogram::prepare_histogram_data(df, val, 50);
-			Box::new(HistogramPlotKernel {
+			Arc::new(HistogramPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -526,7 +583,7 @@ pub fn create_plot(
 			let x = numeric_cols.first().copied().unwrap_or("");
 			let y = numeric_cols.get(1).copied().unwrap_or(x);
 			let prepared = stacked_area::prepare_stacked_area_data(df, cat, x, y);
-			Box::new(StackedAreaPlotKernel {
+			Arc::new(StackedAreaPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -537,7 +594,7 @@ pub fn create_plot(
 				.collect::<Vec<_>>();
 			let cat = string_cols.first().copied().unwrap_or("");
 			let prepared = parallel::prepare_parallel_data(df, &dims, cat);
-			Box::new(ParallelPlotKernel {
+			Arc::new(ParallelPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -548,7 +605,7 @@ pub fn create_plot(
 				.collect::<Vec<_>>();
 			let cat = string_cols.first().copied().unwrap_or("");
 			let prepared = radar::prepare_radar_data(df, &dims, cat);
-			Box::new(RadarPlotKernel {
+			Arc::new(RadarPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}
@@ -557,7 +614,7 @@ pub fn create_plot(
 			let val = numeric_cols.first().copied().unwrap_or("");
 			let max = numeric_cols.get(1).copied().unwrap_or("");
 			let prepared = radial_dial::prepare_radial_dial_data(df, cat, val, max);
-			Box::new(RadialDialPlotKernel {
+			Arc::new(RadialDialPlotKernel {
 				prepared_data: Arc::new(prepared),
 			})
 		}

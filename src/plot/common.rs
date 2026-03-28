@@ -1,5 +1,6 @@
 use crate::gui::messages::PlotMessage;
 use crate::plot::colors::ColorTheme;
+use iced::advanced::image;
 use iced::advanced::mouse::Cursor;
 use iced::alignment;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Program, Stroke, Style, Text};
@@ -176,6 +177,35 @@ pub enum GridLineStyle {
 	Dotted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScatterRenderMode {
+	#[default]
+	Auto,
+	Vector,
+	Downsampled,
+	Rasterized,
+}
+
+impl ScatterRenderMode {
+	pub const ALL: [ScatterRenderMode; 4] = [
+		ScatterRenderMode::Auto,
+		ScatterRenderMode::Vector,
+		ScatterRenderMode::Downsampled,
+		ScatterRenderMode::Rasterized,
+	];
+}
+
+impl std::fmt::Display for ScatterRenderMode {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			ScatterRenderMode::Auto => write!(f, "Auto"),
+			ScatterRenderMode::Vector => write!(f, "Vector"),
+			ScatterRenderMode::Downsampled => write!(f, "Downsampled"),
+			ScatterRenderMode::Rasterized => write!(f, "Rasterized"),
+		}
+	}
+}
+
 impl GridLineStyle {
 	pub const ALL: [GridLineStyle; 3] = [GridLineStyle::Solid, GridLineStyle::Dashed, GridLineStyle::Dotted];
 }
@@ -241,6 +271,10 @@ pub struct PlotSettings {
 	pub y_major_grid_style: GridLineStyle,
 	pub x_minor_grid_style: GridLineStyle,
 	pub y_minor_grid_style: GridLineStyle,
+	pub scatter_render_mode: ScatterRenderMode,
+	pub scatter_max_vector_points: u32,
+	pub scatter_downsample_target: u32,
+	pub scatter_raster_threshold: u32,
 }
 
 impl Default for PlotSettings {
@@ -295,6 +329,10 @@ impl Default for PlotSettings {
 			y_major_grid_style: GridLineStyle::Solid,
 			x_minor_grid_style: GridLineStyle::Solid,
 			y_minor_grid_style: GridLineStyle::Solid,
+			scatter_render_mode: ScatterRenderMode::Auto,
+			scatter_max_vector_points: 50_000,
+			scatter_downsample_target: 200_000,
+			scatter_raster_threshold: 1_000_000,
 		}
 	}
 }
@@ -313,6 +351,24 @@ pub trait PlotBackend {
 	fn fill_path(&mut self, f: &dyn Fn(&mut dyn PathBuilder), color: Color);
 	fn fill_rectangle(&mut self, top_left: Point, size: iced::Size, color: Color);
 	fn fill_text(&mut self, text: Text);
+	fn supports_embedded_raster(&self) -> bool { false }
+	fn supports_native_image_handle(&self) -> bool { false }
+	fn draw_image_handle(
+		&mut self,
+		_top_left: Point,
+		_size: iced::Size,
+		_handle: &image::Handle,
+	) {
+	}
+	fn draw_image_rgba(
+		&mut self,
+		_top_left: Point,
+		_size: iced::Size,
+		_width: u32,
+		_height: u32,
+		_rgba: &[u8],
+	) {
+	}
 	fn translate(&mut self, translation: iced::Vector);
 	fn rotate(&mut self, angle: f32);
 	fn with_save(&mut self, f: &mut dyn FnMut(&mut dyn PlotBackend));
@@ -366,6 +422,43 @@ impl<'a> PlotBackend for IcedBackend<'a> {
 	fn fill_text(&mut self, text: Text) {
 		self.frame.fill_text(text);
 	}
+	fn supports_embedded_raster(&self) -> bool { true }
+	fn supports_native_image_handle(&self) -> bool { true }
+	fn draw_image_handle(
+		&mut self,
+		top_left: Point,
+		size: iced::Size,
+		handle: &image::Handle,
+	) {
+		self.frame.draw_image(
+			Rectangle {
+				x: top_left.x,
+				y: top_left.y,
+				width: size.width,
+				height: size.height,
+			},
+			image::Image::new(handle.clone()),
+		);
+	}
+	fn draw_image_rgba(
+		&mut self,
+		top_left: Point,
+		size: iced::Size,
+		width: u32,
+		height: u32,
+		rgba: &[u8],
+	) {
+		let image = image::Handle::from_rgba(width, height, rgba.to_vec());
+		self.frame.draw_image(
+			Rectangle {
+				x: top_left.x,
+				y: top_left.y,
+				width: size.width,
+				height: size.height,
+			},
+			image::Image::new(image),
+		);
+	}
 	fn translate(&mut self, translation: iced::Vector) {
 		self.frame.translate(translation);
 	}
@@ -386,7 +479,7 @@ impl<'a> PlotBackend for IcedBackend<'a> {
 	}
 }
 
-pub trait PlotKernel {
+pub trait PlotKernel: Send + Sync {
 	fn layout(&self, settings: PlotSettings) -> PlotLayout;
 
 	fn plot(
@@ -416,21 +509,50 @@ pub struct PlotWidget<'a> {
 	pub title: String,
 	pub padding: f32,
 	pub settings: PlotSettings,
+	pub render_revision: u64,
+	pub resize_render_suspended: bool,
+	pub layer: PlotRenderLayer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlotRenderLayer {
+	Data,
+	OverlayInteractive,
+	Full,
+}
+
+#[derive(Default)]
+pub struct PlotCanvasState {
+	last_click: Option<std::time::Instant>,
+	last_hover: Option<String>,
+	plot_cache: canvas::Cache,
+	overlay_cache: canvas::Cache,
+	render_revision: std::cell::Cell<u64>,
+	stable_bounds: std::cell::RefCell<Option<Rectangle>>,
 }
 
 impl<'a> PlotWidget<'a> {
-	pub fn render(&self, backend: &mut dyn PlotBackend, bounds: Rectangle) {
-		backend.fill_rectangle(Point::ORIGIN, bounds.size(), self.settings.background_color);
+	fn plot_area(&self, bounds: Rectangle) -> Rectangle {
 		let padding_top = self.padding + self.settings.plot_padding_top;
 		let padding_bottom = self.padding + self.settings.plot_padding_bottom;
 		let padding_left = self.padding + self.settings.plot_padding_left;
 		let padding_right = self.padding + self.settings.plot_padding_right;
-		let plot_area = Rectangle {
+		Rectangle {
 			x: padding_left,
 			y: padding_top,
 			width: bounds.width - padding_left - padding_right,
 			height: bounds.height - padding_top - padding_bottom,
-		};
+		}
+	}
+
+	pub fn render(&self, backend: &mut dyn PlotBackend, bounds: Rectangle) {
+		self.render_plot_layer(backend, bounds);
+		self.render_overlay_layer(backend, bounds);
+	}
+
+	pub fn render_plot_layer(&self, backend: &mut dyn PlotBackend, bounds: Rectangle) {
+		backend.fill_rectangle(Point::ORIGIN, bounds.size(), self.settings.background_color);
+		let plot_area = self.plot_area(bounds);
 		let layout = self.kernel.layout(self.settings.clone());
 		let transform = CoordinateTransformer::new(&layout, plot_area);
 		backend.with_save(&mut |backend| {
@@ -442,6 +564,15 @@ impl<'a> PlotWidget<'a> {
 				Cursor::Unavailable,
 				self.settings.clone(),
 			);
+		});
+	}
+
+	pub fn render_overlay_layer(&self, backend: &mut dyn PlotBackend, bounds: Rectangle) {
+		let plot_area = self.plot_area(bounds);
+		let layout = self.kernel.layout(self.settings.clone());
+		let transform = CoordinateTransformer::new(&layout, plot_area);
+		backend.with_save(&mut |backend| {
+			backend.translate(iced::Vector::new(plot_area.x, plot_area.y));
 			match &layout {
 				PlotLayout::Cartesian {
 					x_range, y_range, ..
@@ -586,20 +717,56 @@ impl<'a> PlotWidget<'a> {
 }
 
 impl<'a> Program<PlotMessage> for PlotWidget<'a> {
-	type State = Option<std::time::Instant>;
+	type State = PlotCanvasState;
 
 	fn draw(
 		&self,
-		_state: &Self::State,
+		state: &Self::State,
 		renderer: &Renderer,
 		_theme: &Theme,
 		bounds: Rectangle,
 		_cursor: Cursor,
 	) -> Vec<Geometry> {
-		let mut frame = Frame::new(renderer, bounds.size());
-		let mut backend = IcedBackend { frame: &mut frame };
-		self.render(&mut backend, bounds);
-		vec![frame.into_geometry()]
+		let effective_bounds = if self.resize_render_suspended {
+			state.stable_bounds.borrow().unwrap_or(bounds)
+		} else {
+			*state.stable_bounds.borrow_mut() = Some(bounds);
+			bounds
+		};
+		if state.render_revision.get() != self.render_revision {
+			state.plot_cache.clear();
+			state.overlay_cache.clear();
+			state.render_revision.set(self.render_revision);
+		}
+		match self.layer {
+			PlotRenderLayer::Data => {
+				let plot_geometry = state.plot_cache.draw(renderer, effective_bounds.size(), |frame| {
+					let mut backend = IcedBackend { frame };
+					self.render_plot_layer(&mut backend, effective_bounds);
+				});
+				vec![plot_geometry]
+			}
+			PlotRenderLayer::OverlayInteractive => {
+				let overlay_geometry =
+					state.overlay_cache.draw(renderer, effective_bounds.size(), |frame| {
+						let mut backend = IcedBackend { frame };
+						self.render_overlay_layer(&mut backend, effective_bounds);
+					});
+				vec![overlay_geometry]
+			}
+			PlotRenderLayer::Full => {
+				let plot_geometry = state.plot_cache.draw(renderer, effective_bounds.size(), |frame| {
+					let mut backend = IcedBackend { frame };
+					self.render_plot_layer(&mut backend, effective_bounds);
+				});
+				let overlay_geometry =
+					state.overlay_cache.draw(renderer, effective_bounds.size(), |frame| {
+						let mut backend = IcedBackend { frame };
+						self.render_overlay_layer(&mut backend, effective_bounds);
+					});
+				vec![plot_geometry, overlay_geometry]
+			}
+		}
 	}
 
 	fn update(
@@ -609,6 +776,9 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 		bounds: Rectangle,
 		cursor: Cursor,
 	) -> Option<canvas::Action<PlotMessage>> {
+		if self.layer == PlotRenderLayer::Data {
+			return None;
+		}
 		match event {
 			Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
 				let padding_top = self.padding + self.settings.plot_padding_top;
@@ -632,17 +802,22 @@ impl<'a> Program<PlotMessage> for PlotWidget<'a> {
 					None => Cursor::Unavailable,
 				};
 				let hover = self.kernel.hover(&transform, plot_cursor);
-				Some(canvas::Action::publish(PlotMessage::UpdateHover(hover)))
+				if hover != state.last_hover {
+					state.last_hover = hover.clone();
+					Some(canvas::Action::publish(PlotMessage::UpdateHover(hover)))
+				} else {
+					None
+				}
 			}
 			Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
 				if cursor.is_over(bounds) {
 					let now = std::time::Instant::now();
-					if let Some(last_click) = state
-						&& now.duration_since(*last_click) < std::time::Duration::from_millis(500) {
-							*state = None;
+					if let Some(last_click) = state.last_click
+						&& now.duration_since(last_click) < std::time::Duration::from_millis(500) {
+							state.last_click = None;
 							return Some(canvas::Action::publish(PlotMessage::ToggleSettings));
 						}
-					*state = Some(now);
+					state.last_click = Some(now);
 				}
 				None
 			}
