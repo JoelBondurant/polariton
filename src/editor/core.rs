@@ -1,6 +1,8 @@
 use iced::keyboard::{self, Key};
-use iced::widget::{Space, column, container, row, text};
+use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Subscription, Task, Theme, event};
+
+use crate::gui::statusbar::{Segment, StatusBar, StatusBarStyle, Tone};
 
 use super::analysis::{self, AnalysisSnapshot};
 use super::buffer::Buffer;
@@ -43,7 +45,6 @@ pub struct CodeEditor {
 	pub buffer: Buffer,
 	pub theme: EditorTheme,
 	pub view: EditorViewState,
-	pub chrome: EditorChromeState,
 	pub vim: VimHandler,
 	pointer: PointerState,
 }
@@ -55,10 +56,6 @@ pub struct EditorViewState {
 	pub show_whitespace: bool,
 	pub viewport_w: f32,
 	pub viewport_h: f32,
-}
-
-pub struct EditorChromeState {
-	pub status: String,
 }
 
 struct PointerState {
@@ -89,9 +86,6 @@ impl CodeEditor {
 				show_whitespace: true,
 				viewport_w: 0.0,
 				viewport_h: 0.0,
-			},
-			chrome: EditorChromeState {
-				status: String::new(),
 			},
 			vim: VimHandler::new(),
 			pointer: PointerState {
@@ -529,42 +523,7 @@ impl CodeEditor {
 			.block_cursor(self.vim.mode != VimMode::Insert && self.vim.mode != VimMode::Off)
 			.visual_block(visual_block);
 
-		let sc = self.theme.statusbar_text;
-		let sep = self.theme.statusbar_sep;
-		let lang = self.buffer.language().display_name();
-		let wrap_status = if self.buffer.document.wrap_config.enabled {
-			"Wrap:On"
-		} else {
-			"Wrap:Off"
-		};
-
-		let status_bar = container(
-			row![
-				text(&self.chrome.status).size(13).color(sc),
-				Space::new().width(Length::Fill),
-				text(wrap_status).size(13).color(sc),
-				text("  ·  ").size(13).color(sep),
-				text("UTF-8").size(13).color(sc),
-				text("  ·  ").size(13).color(sep),
-				text(lang).size(13).color(sc),
-				text("  ·  ").size(13).color(sep),
-				text("C-l=ws  C-m=map  C-w=wrap  C-A-j/k=carets  MMB=caret  C-\\=vim")
-					.size(11)
-					.color(sep),
-			]
-			.padding(6)
-			.spacing(4),
-		)
-		.style({
-			let bg = self.theme.statusbar_bg;
-			move |_: &Theme| container::Style {
-				background: Some(iced::Background::Color(bg)),
-				..Default::default()
-			}
-		})
-		.width(Length::Fill)
-		.height(Length::Fixed(29.0))
-		.clip(true);
+		let status_bar = self.status_bar().view();
 
 		let cmd_bar_color = self.theme.cmdbar_text;
 		let cmd_bar = container(
@@ -859,65 +818,117 @@ impl CodeEditor {
 	}
 
 	pub(in crate::editor) fn update_status(&mut self) {
+		// Status is derived directly in `status_bar()`. Keep this hook in place so
+		// existing editor actions do not need to change in the same cleanup pass.
+	}
+
+	fn status_bar(&self) -> StatusBar {
 		let p = self.buffer.session.selection.head;
-		let dc = self.buffer.document.diagnostics.len();
-		let sel = if !self.buffer.session.selection.is_caret() {
+		let diagnostics = self.buffer.document.diagnostics.len();
+		let selection = if !self.buffer.session.selection.is_caret() {
 			let (s, e) = self.buffer.session.selection.ordered();
 			let cs = self.buffer.document.rope.line_to_char(*s.line) + *s.col;
 			let ce = self.buffer.document.rope.line_to_char(*e.line) + *e.col;
-			format!(
-				" | {} sel ({} ln)",
+			Some(format!(
+				"{} chars / {} lines",
 				ce.saturating_sub(cs),
 				*e.line - *s.line + 1
-			)
+			))
 		} else {
-			String::new()
+			None
 		};
 		let search = if self.buffer.session.search.is_open {
-			format!(
-				" | Search: {}/{}",
+			Some(format!(
+				"{}/{}",
 				self.buffer.session.search.current_match + 1,
 				self.buffer.session.search.match_count()
-			)
+			))
 		} else {
-			String::new()
+			None
 		};
 		let carets = if self.buffer.has_secondary_selections() {
-			format!(" | {} cursors", self.buffer.selection_count())
+			Some(self.buffer.selection_count().to_string())
 		} else {
-			String::new()
+			None
 		};
-		let mode = match self.vim.mode {
-			VimMode::Off => Some("OFF"),
-			VimMode::Normal => Some("NOR"),
-			VimMode::Insert => Some("INS"),
-			VimMode::Visual => Some("VIS"),
-			VimMode::VisualLine => Some("V-LINE"),
-			VimMode::VisualBlock => Some("V-BLOCK"),
-			VimMode::Command => Some("CMD"),
-		};
-		self.chrome.status = if let Some(m) = mode {
-			format!(
-				"{} | Ln {}, Col {}{}{}{} | {} diag",
-				m,
-				*p.line + 1,
-				*p.col + 1,
-				sel,
-				search,
-				carets,
-				dc
-			)
+		let wrap_status = if self.buffer.document.wrap_config.enabled {
+			"wrap on"
 		} else {
-			format!(
-				"Ln {}, Col {}{}{}{} | {} diag",
-				*p.line + 1,
-				*p.col + 1,
-				sel,
-				search,
-				carets,
-				dc
-			)
+			"wrap off"
 		};
+		let (mode_label, mode_tone) = match self.vim.mode {
+			VimMode::Off => ("vim off", Tone::Warning),
+			VimMode::Normal => ("vim normal", Tone::Accent),
+			VimMode::Insert => ("vim insert", Tone::Success),
+			VimMode::Visual => ("vim visual", Tone::Accent),
+			VimMode::VisualLine => ("vim visual-line", Tone::Accent),
+			VimMode::VisualBlock => ("vim visual-block", Tone::Accent),
+			VimMode::Command => ("vim command", Tone::Accent),
+		};
+
+		let mut bar = StatusBar::new()
+			.style(self.status_bar_style())
+			.inset(0.0, 0.0)
+			.lane_split(3, 4)
+			.left(Segment::toned_text(mode_label, mode_tone))
+			.left(Segment::text(wrap_status))
+			.left(Segment::text("UTF-8"))
+			.left(Segment::text(self.buffer.language().display_name()))
+			.right(
+				Segment::text("C-l=ws  C-m=map  C-w=wrap  C-A-j/k=carets  MMB=caret  C-\\=vim")
+					.max_chars(40)
+					.fill_portion(1),
+			)
+			.right(
+				Segment::label_value(
+					"Ln",
+					format!("{}, Col {}", *p.line + 1, *p.col + 1),
+					Tone::Normal,
+				)
+				.reserve_chars(14),
+			)
+			.right(
+				Segment::label_value(
+					"diag",
+					diagnostics.to_string(),
+					if diagnostics > 0 {
+						Tone::Warning
+					} else {
+						Tone::Success
+					},
+				)
+				.reserve_chars(8),
+			);
+		if let Some(selection) = selection {
+			bar = bar.right(
+				Segment::label_value("sel", selection, Tone::Normal)
+					.max_chars(22)
+					.reserve_chars(22),
+			);
+		}
+		if let Some(search) = search {
+			bar = bar.right(Segment::label_value("search", search, Tone::Accent).reserve_chars(12));
+		}
+		if let Some(carets) = carets {
+			bar = bar.right(Segment::label_value("carets", carets, Tone::Accent).reserve_chars(10));
+		}
+		bar
+	}
+
+	fn status_bar_style(&self) -> StatusBarStyle {
+		StatusBarStyle {
+			rail_background: self.theme.statusbar_bg,
+			rail_separator: self.theme.statusbar_sep,
+			segment_background: self.theme.statusbar_bg,
+			segment_border: self.theme.statusbar_sep,
+			progress_background: self.theme.background,
+			progress_bar: self.theme.cursor,
+			text_normal: self.theme.statusbar_text,
+			text_accent: self.theme.statusbar_text,
+			text_success: self.theme.function,
+			text_warning: self.theme.number,
+			text_danger: self.theme.error_underline,
+		}
 	}
 
 	pub(in crate::editor) fn cursor_visual_line_idx(&self) -> usize {

@@ -14,6 +14,7 @@ use crate::persistence::{SavedConnection, SavedStatement};
 use crate::plot::colors::ColorTheme;
 use crate::plot::common::{GridLineStyle, PlotRenderLayer, PlotWidget, ScatterRenderMode};
 use crate::plot::core::PlotType;
+use crate::gui::statusbar::{Segment, StatusBar, Tone};
 use iced::widget::{
 	button, canvas, center, checkbox, column, container, mouse_area, opaque, pane_grid, pick_list,
 	row, scrollable, space, stack, text, text_input, TextInput,
@@ -231,48 +232,14 @@ pub fn main_screen<'a>(
 	.on_drag(Message::PaneDragged)
 	.on_resize(10, Message::PaneResized);
 	let main_content = container(main_pane).padding(4).width(Fill);
-	let status_cell_style = |_: &Theme| container::Style {
-		border: border::Border {
-			color: colors::BORDER_DIM,
-			width: 1.0,
-			radius: 3.0.into(),
-		},
-		..Default::default()
-	};
-	let time_str = status_time_elapsed
-		.map(|t| format!("{t:.3}s"))
-		.unwrap_or_default();
-	let size_str = status_df_size
-		.map(|(r, c)| format!("{r} \u{00d7} {c}"))
-		.unwrap_or_default();
-	let time_box = container(center(
-		text(time_str).color(colors::TEXT_SECONDARY).size(14),
-	))
-	.width(100)
-	.height(Fill)
-	.padding([0, 4])
-	.style(status_cell_style);
-	let size_box = container(center(
-		text(size_str).color(colors::TEXT_SECONDARY).size(14),
-	))
-	.width(140)
-	.height(Fill)
-	.padding([0, 4])
-	.style(status_cell_style);
-	let msg_box = container(center(text(status_msg).color(colors::TEXT_STATUS).size(14)))
-		.width(Fill)
-		.height(Fill)
-		.padding([0, 6])
-		.style(status_cell_style);
-	let error_box = container(center(text(status_error).color(colors::DANGER).size(14)))
-		.width(Fill)
-		.height(Fill)
-		.padding([0, 6])
-		.style(status_cell_style);
-	let status_bar = container(row![time_box, size_box, msg_box, error_box].spacing(3))
-		.height(28)
-		.padding([2, 4])
-		.width(Fill);
+	let status_bar = app_status_bar(
+		status_msg,
+		status_error,
+		status_df_size,
+		status_time_elapsed,
+		adapter_state,
+	)
+	.view();
 	let main_window = window_decorations(
 		column![main_content, status_bar],
 		menu_state,
@@ -302,6 +269,49 @@ pub fn main_screen<'a>(
 		container(text("")).into()
 	};
 	stack![main_window, adapter_modal, password_modal, settings_modal, save_statement_modal].into()
+}
+
+fn app_status_bar(
+	status_msg: &str,
+	status_error: &str,
+	status_df_size: Option<(usize, usize)>,
+	status_time_elapsed: Option<f64>,
+	adapter_state: &AdapterState,
+) -> StatusBar {
+	let (connection_label, connection_tone) = match adapter_state.stage {
+		AdapterStage::Connected => ("connected", Tone::Success),
+		AdapterStage::Configured => ("configured", Tone::Accent),
+		AdapterStage::Unconfigured => ("configure adapter", Tone::Warning),
+		AdapterStage::Unselected => ("select adapter", Tone::Warning),
+		AdapterStage::None => ("disconnected", Tone::Danger),
+	};
+	let mut bar = StatusBar::new()
+		.lane_split(2, 5)
+		.left(Segment::toned_text(connection_label, connection_tone))
+		.left(Segment::text(adapter_state.selection.adapter_type_str()))
+		.right(
+			Segment::toned_text(status_error, Tone::Danger)
+				.max_chars(42)
+				.fill_portion(1),
+		)
+		.right(
+			Segment::toned_text(status_msg, Tone::Accent)
+				.max_chars(56)
+				.fill_portion(2),
+		);
+	if let Some((rows, cols)) = status_df_size {
+		bar = bar.right(
+			Segment::label_value("table", format!("{rows} x {cols}"), Tone::Normal)
+				.reserve_chars(18),
+		);
+	}
+	if let Some(time_elapsed) = status_time_elapsed {
+		bar = bar.right(
+			Segment::label_value("time", format!("{time_elapsed:.3}s"), Tone::Normal)
+				.reserve_chars(12),
+		);
+	}
+	bar
 }
 
 pub fn menu_bar<'a>(
